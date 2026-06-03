@@ -3,6 +3,7 @@
 ## Table of Contents
 * [Overview](#overview)
 * [Modules](#modules)
+  * [Tree Annotation](#tree-annotation)
   * [HyPhy Execution](#hyphy-execution)
   * [Results Summary](#results-summary)
 * [Supported HyPhy Models](#supported-hyphy-models)
@@ -16,6 +17,53 @@ HYphlow is a streamlined pipeline designed to automate and manage HyPhy analyses
 ---
 
 ## Modules
+
+### Tree Annotation
+The Tree Annotation module uses CSV trait data to automatically add foreground labels (`{FG}`) to a Newick tree file.
+
+When preparing HyPhy analyses, users often need to manually decide which branches should be treated as foreground branches. This module helps automate that step by comparing trait information across the tree and generating a foreground-annotated Newick file based on ancestral state reconstruction.
+
+**Key Features**
+* **Uses CSV trait data** and a matching Newick tree file automatically.
+* **Allows users to choose** the target trait columns and foreground phenotypic values.
+* **Identifies candidate foreground branches** using Fitch, Sankoff, and Felsenstein ML algorithms.
+* **Generates scalable preview images (SVG)** for each method and the final consensus.
+* **Saves a foreground-annotated** Newick file ready for HyPhy execution.
+* **Exports a detailed CSV report** scoring internal nodes.
+
+**Supported Annotation Methods**
+Currently supported methods include:
+* Fitch parsimony
+* Sankoff parsimony
+* Felsenstein likelihood
+* Strict Consensus
+
+**Input**
+Use a trait CSV file and a matching Newick tree file:
+```text
+trait_data.csv
+species_tree.nwk
+```
+
+Example CSV format:
+```text
+species,trait
+Species_A,nocturnal
+Species_B,nocturnal
+Species_C,diurnal
+Species_D,diurnal
+```
+
+**Output**
+The module generates an annotated Newick tree, preview images, and a report:
+```text
+species_tree_annotated_Strict_Consensus.nwk
+species_tree_annotated_figure.svg
+Rpt_species_tree_annotated.csv
+```
+The annotated Newick tree can be used directly in the HyPhy Execution module.
+
+---
 
 ### HyPhy Execution
 The HyPhy Execution module generates and runs batch HyPhy analysis scripts using matched FASTA alignment files and Newick tree files. 
@@ -103,8 +151,8 @@ conda install -c bioconda hyphy
 hyphy --version
 ```
 
-**For Results Summary:**
-The following Python packages are required to parse JSON outputs and generate Excel files.
+**For Python Modules (Tree Annotation & Results Summary):**
+The following Python packages are required to run GUI components, parse trees, and generate Excel files.
 ```bash
-pip install pandas xlsxwriter
+pip install pandas xlsxwriter ete3 PyQt5
 ```
