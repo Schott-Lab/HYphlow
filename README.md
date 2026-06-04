@@ -25,7 +25,52 @@ HYphlow is a streamlined pipeline designed to automate and manage HyPhy analyses
 *(Documentation for this sub-module goes here)*
 
 ### Tree Pruning
-*(Documentation for this sub-module goes here)*
+The Tree Pruning module generates gene-specific Newick trees by pruning a master tree based on the taxa present in each FASTA alignment file.
+
+When running phylogenetic analyses for multiple genes, each gene alignment may contain a different set of species. This module reduces manual work by automatically removing taxa that are not present in the FASTA file, producing a matching tree for each alignment.
+
+**Key Features**
+* **Uses a master Newick tree** as the reference tree.
+* **Reads species labels** from FASTA alignment files.
+* **Removes tree leaves** that are not present in the FASTA file.
+* **Generates gene-specific** pruned Newick trees.
+* **Checks whether FASTA taxa** are present in the master tree.
+* **Reports missing or unmatched taxa** to prevent execution errors.
+* **Saves pruned trees** for downstream HyPhy analyses.
+
+**Input**
+Use a master Newick tree and one or more FASTA alignment files. 
+For FASTA files, it is recommended to use the formatted outputs generated from the Standardization step.
+```text
+Master_Species_Tree.nwk
+GeneName_aln_fmt_v1_MMDD.fasta
+AnotherGene_aln_fmt_v1_MMDD.fasta
+```
+
+Example FASTA file:
+```text
+>Species_A
+ATGCGT...
+>Species_B
+ATGCGT...
+>Species_C
+ATGCGT...
+```
+
+Example master tree:
+```text
+(Species_A,Species_B,Species_C,Species_D,Species_E);
+```
+
+**Output**
+The module generates pruned Newick trees that match the taxa in each FASTA alignment, along with detailed Excel reports.
+```text
+GeneName_prn_v1_MMDD.nwk
+AnotherGene_prn_v1_MMDD.nwk
+Rpt_GeneName_prn_v1_MMDD.xlsx
+Rpt_AnotherGene_prn_v1_MMDD.xlsx
+```
+The pruned trees can be used directly in the Data Reconciliation and Tree Annotation modules.
 
 ### Data Reconciliation
 The Data Reconciliation module checks and standardizes species labels across CSV, FASTA, and Newick tree files.
@@ -44,11 +89,11 @@ When preparing comparative or phylogenetic analyses, species names often appear 
 
 **Input**
 Use CSV, FASTA, and Newick tree files that contain overlapping species labels. 
-For FASTA and NWK files, it is recommended to use the formatted outputs generated from the previous Data Preparation steps.
+For FASTA and NWK files, it is recommended to use the formatted or pruned outputs generated from the previous Data Preparation steps.
 ```text
 trait_data.csv
 GeneName_aln_fmt_v1_MMDD.fasta
-GeneName_tree_fmt_v1_MMDD.nwk
+GeneName_prn_v1_MMDD.nwk
 ```
 
 The CSV file should include a species column.
