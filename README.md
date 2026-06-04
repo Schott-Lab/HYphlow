@@ -2,10 +2,13 @@
 
 ## Table of Contents
 * [Overview](#overview)
-* [Modules](#modules)
-  * [Tree Annotation](#tree-annotation)
-  * [HyPhy Execution](#hyphy-execution)
-  * [Results Summary](#results-summary)
+* [Data Preparation](#data-preparation)
+  * [Species Label Standardization](#species-label-standardization)
+  * [Tree Pruning](#tree-pruning)
+  * [Data Reconciliation](#data-reconciliation)
+* [Tree Annotation](#tree-annotation)
+* [HyPhy Execution](#hyphy-execution)
+* [Results Summary](#results-summary)
 * [Supported HyPhy Models](#supported-hyphy-models)
 * [Dependencies](#dependencies)
 
@@ -16,9 +19,71 @@ HYphlow is a streamlined pipeline designed to automate and manage HyPhy analyses
 
 ---
 
-## Modules
+## Data Preparation
 
-### Tree Annotation
+### Species Label Standardization
+*(Documentation for this sub-module goes here)*
+
+### Tree Pruning
+*(Documentation for this sub-module goes here)*
+
+### Data Reconciliation
+The Data Reconciliation module checks and standardizes species labels across CSV, FASTA, and Newick tree files.
+
+When preparing comparative or phylogenetic analyses, species names often appear in different formats across input files. For example, the same species may appear with extra sequence IDs in FASTA headers, different spellings in CSV files, or inconsistent labels in Newick trees. This module helps identify and correct these mismatches before running downstream analyses.
+
+**Key Features**
+* **Checks species names** in CSV files against the NCBI taxonomy database.
+* **Standardizes FASTA headers** into species-level labels.
+* **Standardizes Newick tree leaf names** into species-level labels.
+* **Compares species labels** across CSV, FASTA, and Newick files.
+* **Identifies missing or mismatched taxa** between input files.
+* **Supports automatic correction** for similar species names when possible.
+* **Generates cleaned input files** for downstream analysis.
+* **Saves validation and reconciliation reports** for review.
+
+**Input**
+Use CSV, FASTA, and Newick tree files that contain overlapping species labels. 
+For FASTA and NWK files, it is recommended to use the formatted outputs generated from the previous Data Preparation steps.
+```text
+trait_data.csv
+GeneName_aln_fmt_v1_MMDD.fasta
+GeneName_tree_fmt_v1_MMDD.nwk
+```
+
+The CSV file should include a species column.
+```text
+species,trait
+Species_A,nocturnal
+Species_B,diurnal
+Species_C,nocturnal
+```
+
+The FASTA file may contain longer sequence headers.
+```text
+>Species_A_gene1
+ATGCGT...
+>Species_B_gene1
+ATGCGT...
+```
+
+The Newick tree should contain matching species labels.
+```text
+(Species_A,Species_B,Species_C);
+```
+
+**Output**
+The module generates standardized files and detailed Excel reconciliation reports.
+```text
+GeneName_aln_rec_v1_MMDD.fasta
+GeneName_tree_rec_v1_MMDD.nwk
+Rpt_GeneName_Reconciliation_Details_MMDD.xlsx
+```
+These cleaned files can be used directly in the Tree Annotation and HyPhy Execution modules.
+
+---
+
+## Tree Annotation
 The Tree Annotation module uses CSV trait data to automatically add foreground labels (`{FG}`) to a Newick tree file.
 
 When preparing HyPhy analyses, users often need to manually decide which branches should be treated as foreground branches. This module helps automate that step by comparing trait information across the tree and generating a foreground-annotated Newick file based on ancestral state reconstruction.
@@ -39,10 +104,10 @@ Currently supported methods include:
 * Strict Consensus
 
 **Input**
-Use a trait CSV file and a matching Newick tree file:
+Use a trait CSV file and a matching reconciled Newick tree file:
 ```text
 trait_data.csv
-species_tree.nwk
+GeneName_tree_rec_v1_MMDD.nwk
 ```
 
 Example CSV format:
@@ -57,15 +122,15 @@ Species_D,diurnal
 **Output**
 The module generates an annotated Newick tree, preview images, and a report:
 ```text
-species_tree_annotated_Strict_Consensus.nwk
-species_tree_annotated_figure.svg
-Rpt_species_tree_annotated.csv
+GeneName_tree_annotated_Strict_Consensus.nwk
+GeneName_tree_annotated_figure.svg
+Rpt_GeneName_tree_annotated_MMDD.csv
 ```
 The annotated Newick tree can be used directly in the HyPhy Execution module.
 
 ---
 
-### HyPhy Execution
+## HyPhy Execution
 The HyPhy Execution module generates and runs batch HyPhy analysis scripts using matched FASTA alignment files and Newick tree files. 
 
 When analyzing multiple genes, users often need to prepare separate HyPhy commands for each alignment and tree pair. This module reduces that manual work by matching input files, generating execution scripts, and supporting parallel HyPhy analyses.
@@ -82,25 +147,25 @@ When analyzing multiple genes, users often need to prepare separate HyPhy comman
 **Input**
 Use matched FASTA alignment files and Newick tree files:
 ```text
-example_gene1.fasta
-example_gene1.nwk
+GeneName_aln_rec_v1_MMDD.fasta
+GeneName_tree_rec_v1_MMDD.nwk
 ```
 
 For foreground-branch analyses, use Newick tree files that contain foreground branch labels (`{FG}`):
 ```text
-example_gene1_FG.nwk
+GeneName_tree_annotated_Strict_Consensus.nwk
 ```
 
 **Output**
 The module generates HyPhy JSON result files and individual log reports:
 ```text
-example_gene1_BUSTED.json
-example_gene1_BUSTED_log.txt
+GeneName_aln_rec_v1_MMDD_BUSTED.json
+GeneName_aln_rec_v1_MMDD_BUSTED_log.txt
 ```
 
 ---
 
-### Results Summary
+## Results Summary
 The Results Summary module extracts key results from HyPhy `.json` output files and saves them into a single Excel summary file.
 
 When running HyPhy analyses for multiple genes, users often need to open many JSON files manually to check p-values, LRT scores, and significant branches. This module reduces that manual work by collecting the main results automatically.
@@ -117,14 +182,14 @@ When running HyPhy analyses for multiple genes, users often need to open many JS
 **Input**
 Use the final `.json` output files generated by the HyPhy Execution module:
 ```text
-example_gene1_BUSTED.json
-example_gene2_RELAX.json
+GeneName_aln_rec_v1_MMDD_BUSTED.json
+GeneName_aln_rec_v1_MMDD_RELAX.json
 ```
 
 **Output**
 The module generates a single organized Excel workbook:
 ```text
-HyPhy_results_summary.xlsx
+HyPhy_results_summary_MMDD.xlsx
 ```
 
 ---
@@ -151,8 +216,8 @@ conda install -c bioconda hyphy
 hyphy --version
 ```
 
-**For Python Modules (Tree Annotation & Results Summary):**
-The following Python packages are required to run GUI components, parse trees, and generate Excel files.
+**For Python Modules:**
+The following Python packages are required to run GUI components, parse trees, align data, and generate Excel files.
 ```bash
-pip install pandas xlsxwriter ete3 PyQt5
+pip install pandas biopython ete3 rapidfuzz taxopy xlsxwriter PyQt5
 ```
