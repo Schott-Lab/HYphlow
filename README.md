@@ -22,7 +22,63 @@ HYphlow is a streamlined pipeline designed to automate and manage HyPhy analyses
 ## Data Preparation
 
 ### Species Label Standardization
-*(Documentation for this sub-module goes here)*
+The Species Label Standardization module checks species names in CSV metadata against the NCBI taxonomy database and standardizes FASTA and Newick labels into a consistent format.
+
+CSV metadata files are used to validate species names using NCBI taxonomy. FASTA headers and Newick tree labels are then formatted to remove extra information, such as accession numbers and trailing tags, extracting clean and consistent species or subspecies labels.
+
+**Key Features**
+* **Compares species names** in the CSV metadata file with the NCBI taxonomy database.
+* **Identifies valid, similar, missing, or unmatched** species names.
+* **Supports automatic correction** for similar species names when possible.
+* **Formats FASTA headers** by using the gene name to truncate unnecessary strings, retaining clean species/subspecies labels.
+* **Formats Newick tree leaf names** into a consistent species/subspecies structure.
+* **Automatically recognizes trinomial nomenclature** to support and preserve valid subspecies names.
+* **Removes extra accession numbers** (e.g., XM_, NM_) or unnecessary label information.
+* **Generates standardized files** with `_fmt` tags and detailed Excel validation reports for downstream analysis.
+
+**Input**
+Use a CSV metadata file, FASTA alignment file, and Newick tree file.
+```text
+trait_metadata.csv
+gene_alignment.fasta
+gene_tree.nwk
+```
+
+Example CSV metadata:
+```text
+species,trait
+Terrapene carolina,terrestrial
+Chrysemys picta bellii,freshwater
+Chelonia mydas,marine
+```
+
+Example FASTA headers before standardization:
+```text
+>Terrapene_carolina_OPN3_XM_024203557
+ATGCGT...
+>Chrysemys_picta_bellii_OPN3_XM_005301234
+ATGCGT...
+```
+
+Example FASTA headers after standardization:
+```text
+>Terrapene_carolina
+ATGCGT...
+>Chrysemys_picta_bellii
+ATGCGT...
+```
+
+**Output**
+The module generates validated metadata, standardized FASTA files, standardized Newick files, and detailed Excel reports.
+```text
+trait_metadata_fmt_v1_MMDD.csv
+gene_alignment_fmt_v1_MMDD.fasta
+gene_tree_fmt_v1_MMDD.nwk
+Rpt_trait_metadata_fmt_v1_MMDD.xlsx
+Rpt_gene_alignment_fmt_v1_MMDD.xlsx
+Rpt_gene_tree_fmt_v1_MMDD.xlsx
+```
+These standardized files can be used directly in the Tree Pruning, Data Reconciliation, and Tree Annotation modules.
 
 ### Tree Pruning
 The Tree Pruning module generates gene-specific Newick trees by pruning a master tree based on the taxa present in each FASTA alignment file.
