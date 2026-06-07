@@ -630,8 +630,7 @@ class UnifiedDropZone(QWidget):
             self,
             "Select Files",
             default_dir,
-            f"Supported Files ({filter_str})",
-            options=QFileDialog.DontUseNativeDialog,
+            f"Supported Files ({filter_str})"
         )
         if files:
             self.add_files(files)
