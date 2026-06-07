@@ -626,14 +626,35 @@ class UnifiedDropZone(QWidget):
             default_dir = ""
 
         filter_str = " ".join([f"*{ext}" for ext in self.supported_exts])
-        files, _ = QFileDialog.getOpenFileNames(
-            self,
-            "Select Files",
-            default_dir,
-            f"Supported Files ({filter_str})"
-        )
-        if files:
-            self.add_files(files)
+        
+        import platform
+        
+       
+        if platform.system() == "Linux":
+            dialog = QFileDialog(self, "Select Files", default_dir, f"Supported Files ({filter_str})")
+            dialog.setFileMode(QFileDialog.ExistingFiles)
+            
+            dialog.setStyleSheet("""
+                QWidget { background-color: #FFFFFF; color: #1D1D1F; }
+                QTreeView, QListView, QTableView { background-color: #FFFFFF; color: #1D1D1F; alternate-background-color: #F2F2F7; outline: none; }
+                QTreeView::item:selected, QListView::item:selected { background-color: #0071E3; color: #FFFFFF; }
+                QHeaderView::section { background-color: #F2F2F7; color: #1D1D1F; border: 1px solid #D1D1D6; padding: 4px; }
+                QPushButton { background-color: #E5E5EA; color: #1D1D1F; border-radius: 4px; padding: 6px 12px; font-weight: bold; }
+                QPushButton:hover { background-color: #D1D1D6; }
+                QLineEdit, QComboBox { background-color: #F5F5F7; color: #1D1D1F; border: 1px solid #D1D1D6; padding: 4px; }
+            """)
+            if dialog.exec_():
+                files = dialog.selectedFiles()
+                if files:
+                    self.add_files(files)
+                    
+        
+        else:
+            files, _ = QFileDialog.getOpenFileNames(
+                self, "Select Files", default_dir, f"Supported Files ({filter_str})"
+            )
+            if files:
+                self.add_files(files)
 
     def _trigger_error(self):
         self.is_error = True
