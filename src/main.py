@@ -914,19 +914,29 @@ if __name__ == "__main__":
         font-family: 'Roboto', -apple-system, 'Segoe UI', sans-serif;
         color: #1D1D1F;
     }
-    QTreeView, QListView, QTableView {
+    QFileDialog, QFileDialog * {
         background-color: #FFFFFF;
         color: #1D1D1F;
-        selection-background-color: #F2F2F7;
-        selection-color: #1D1D1F;
     }
-    QHeaderView::section {
+    QFileDialog QTreeView, QFileDialog QListView, QFileDialog QTableView {
+        background-color: #FFFFFF;
+        color: #1D1D1F;
+        selection-background-color: #0071E3;
+        selection-color: #FFFFFF;
+    }
+    QFileDialog QHeaderView::section {
         background-color: #F2F2F7;
         color: #1D1D1F;
         border: none;
         border-right: 1px solid #D1D1D6;
         border-bottom: 1px solid #D1D1D6;
         padding: 4px;
+    }
+    QFileDialog QPushButton, QFileDialog QComboBox, QFileDialog QLineEdit {
+        background-color: #F5F5F7;
+        color: #1D1D1F;
+        border: 1px solid #D1D1D6;
+        border-radius: 4px;
     }
     QLabel#MainTitle { font-size: 24px; font-weight: 800; color: #1D1D1F; background: transparent; border: none; }
     QLabel#SectionHeader { font-size: 20px; font-weight: 700; color: #1D1D1F; background: transparent; border: none; }
