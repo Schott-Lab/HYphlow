@@ -1,5 +1,7 @@
 import os
 import re
+import sys
+import shutil
 import zipfile
 import subprocess
 from pathlib import Path
@@ -152,6 +154,8 @@ def generate_bash_script(job_list, threads):
 
     batches, allocations = prep_parallel_tasks(job_list, threads)
 
+    hyphy_absolute_path = shutil.which("hyphy")
+
     lines = [
         "#!/bin/bash",
         "# =====================================================================",
@@ -160,20 +164,28 @@ def generate_bash_script(job_list, threads):
         "",
         "# ---------------------------------------------------------------------",
         "# [DO NOT EDIT] SYSTEM SETUP BLOCK",
-        "# This section auto-detects your OS (Mac/Linux/Windows WSL)",
-        "# and safely locates the HyPhy engine.",
         "# ---------------------------------------------------------------------",
         "export TOLERATE_NUMERICAL_ERRORS=1",
-        "OS_TYPE=$(uname -s)",
-        "if command -v conda &> /dev/null || command -v micromamba &> /dev/null; then",
-        "    [ -f ~/.bashrc ] && source ~/.bashrc 2>/dev/null",
-        "    [ -f ~/.zshrc ] && source ~/.zshrc 2>/dev/null",
-        "fi",
-        "if command -v hyphy &> /dev/null; then",
-        '    HYPHY_EXEC="hyphy"',
-        "else",
-        '    HYPHY_EXEC=$(find ~/micromamba ~/miniconda3 ~/anaconda3 ~/.conda /usr/local/bin /usr/bin /opt/homebrew/bin -type f -name "hyphy" -executable 2>/dev/null | grep "/bin/hyphy" | head -n 1)',
-        "fi",
+    ]
+
+    if hyphy_absolute_path and sys.platform != "win32":
+        lines.append(f'HYPHY_EXEC="{hyphy_absolute_path}"')
+    else:
+
+        lines.extend([
+            "OS_TYPE=$(uname -s)",
+            "if command -v conda &> /dev/null || command -v micromamba &> /dev/null; then",
+            "    [ -f ~/.bashrc ] && source ~/.bashrc 2>/dev/null",
+            "    [ -f ~/.zshrc ] && source ~/.zshrc 2>/dev/null",
+            "fi",
+            "if command -v hyphy &> /dev/null; then",
+            '    HYPHY_EXEC="hyphy"',
+            "else",
+            '    HYPHY_EXEC=$(find ~/.local/share/mamba ~/micromamba ~/miniconda3 ~/anaconda3 ~/.conda /usr/local/bin /usr/bin /opt/homebrew/bin -type f -name "hyphy" -executable 2>/dev/null | grep "/bin/hyphy" | head -n 1)',
+            "fi"
+        ])
+
+    lines.extend([
         'if [ -z "$HYPHY_EXEC" ]; then',
         '    echo "[ERROR] HyPhy executable not found! Please ensure it is installed and accessible."',
         "    exit 1",
@@ -185,7 +197,49 @@ def generate_bash_script(job_list, threads):
         "# Add your custom flags below (e.g., --code Universal)",
         "# =====================================================================",
         'echo "Starting HyPhy Parallel pipeline..."\n',
-    ]
+    ])
+
+    for b_idx, batch in enumerate(batches):
+        lines.append(f'echo "----------------------------------------"')
+        lines.append(
+            f'echo "Starting Batch {b_idx + 1}/{len(batches)} (Parallel Execution)..."'
+        )
+
+        for task in batch:
+            f_name = task["f_name"]
+            t_name = task["t_name"]
+            model = task["model"].lower()
+            base_name = Path(t_name).stem
+            output_name = f"{base_name}_{model.upper()}.JSON"
+            error_log = f"{base_name}_{model.upper()}_log.txt"
+            task_cores = allocations[task["key"]]
+
+            trace_key = task["key"]
+            lines.append(f'echo "===REACTION_START==={trace_key}==="')
+
+            cmd = f'"$HYPHY_EXEC" {model} --alignment "{f_name}" --tree "{t_name}" --CPU {task_cores} --output "{output_name}"'
+
+            if task["job"].get("has_fg"):
+                if model == "relax":
+                    cmd += " --test FG"
+                elif model in ["busted", "absrel", "meme", "fel"]:
+                    cmd += " --branches FG"
+                if model == "busted":
+                    cmd += " --srv Yes"
+
+            bash_logic = (
+                f'({cmd} 2>&1 | tee "{error_log}"; '
+                f"if [ ${{PIPESTATUS[0]}} -eq 0 ]; then "
+                f'echo "===REACTION_DONE==={trace_key}==="; '
+                f'else echo "===REACTION_ERROR==={trace_key}==="; fi) &'
+            )
+            lines.append(bash_logic)
+
+        lines.append("wait")
+        lines.append(f'echo "Batch {b_idx + 1} completed."\n')
+
+    lines.append('echo "All tasks completed successfully!"\n')
+    return "\n".join(lines)
 
     for b_idx, batch in enumerate(batches):
         lines.append(f'echo "----------------------------------------"')
