@@ -40,6 +40,12 @@ from t3_hyphy_ui import Tab3HyPhyUI
 from t4_summary_ui import Tab4SummaryUI
 from common_ui import LogConsole
 
+def get_logo_path():
+    try:
+        base = Path(sys._MEIPASS)
+        return base / "assets" / "logo.png"
+    except Exception:
+        return Path(__file__).resolve().parent.parent / "assets" / "logo.png"
 
 class SpinnerLabel(QLabel):
     def __init__(self, size=16, color="#0071E3"):
@@ -81,7 +87,8 @@ class StartupDialog(QDialog):
         self.setWindowTitle("Welcome to HYphlow")
         self.setFixedSize(500, 320)
         self.settings = QSettings("HYphlow_Team", "HYphlow_App")
-        logo_path = t1_st1_logic.get_resource_path("logo.png")
+        logo_path = get_logo_path()
+        if os.path.exists(logo_path):
         if os.path.exists(logo_path):
             self.setWindowIcon(QIcon(str(logo_path)))
         self.setStyleSheet("""
@@ -321,7 +328,7 @@ class HyphlowMain(QMainWindow):
         super().__init__()
         self.setWindowTitle("HYphlow v1")
         self.resize(1200, 850)
-        logo_path = t1_st1_logic.get_resource_path("logo.png")
+        logo_path = get_logo_path()
         if os.path.exists(logo_path):
             self.setWindowIcon(QIcon(str(logo_path)))
         QApplication.setFont(QFont("Segoe UI", 10))
