@@ -191,7 +191,16 @@ class Subtab4PruningUI(QWidget):
                     f"[INFO] Automatically opening report directory: {rep_dir}"
                 )
                 try:
-                    os.startfile(rep_dir)
+                    import platform
+                    import subprocess
+                    
+                    if platform.system() == "Windows":
+                        os.startfile(rep_dir)
+                    elif platform.system() == "Darwin":  # Mac
+                        subprocess.call(["open", rep_dir])
+                    else:  # Linux / WSL
+                        subprocess.call(["xdg-open", rep_dir])
+                        
                 except Exception as e:
                     self.log_msg.emit(f"[ERROR] Could not open directory: {e}")
         else:
