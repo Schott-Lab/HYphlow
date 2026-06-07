@@ -89,7 +89,6 @@ class StartupDialog(QDialog):
         self.settings = QSettings("HYphlow_Team", "HYphlow_App")
         logo_path = get_logo_path()
         if os.path.exists(logo_path):
-        if os.path.exists(logo_path):
             self.setWindowIcon(QIcon(str(logo_path)))
         self.setStyleSheet("""
             QDialog { background-color: #FFFFFF; }
