@@ -15,7 +15,8 @@
 ---
 
 ## Overview
-HYphlow is a streamlined pipeline designed to automate and manage HyPhy analyses for multiple genes, from execution to result summarization.
+
+HYphlow is a streamlined workflow for preparing input files, annotating foreground branches, running batch HyPhy analyses, and summarizing results for multiple genes.
 
 ---
 
