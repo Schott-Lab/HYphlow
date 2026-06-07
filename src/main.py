@@ -701,7 +701,7 @@ class HyphlowMain(QMainWindow):
 
     def set_workspace(self):
         folder = QFileDialog.getExistingDirectory(
-            self, "Select Project Workspace", options=QFileDialog.DontUseNativeDialog
+            self, "Select Project Workspace"
         )
         if folder:
             self.path_label.setText(folder)
