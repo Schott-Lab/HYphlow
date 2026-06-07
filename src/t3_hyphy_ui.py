@@ -248,14 +248,30 @@ class Tab3HyPhyUI(QWidget):
                 if t1_st1_logic.CURRENT_PROJECT_PATH
                 else ""
             )
-            files, _ = QFileDialog.getOpenFileNames(
-                self_dz,
-                "Select FASTA Files",
-                default_dir,
-                "FASTA Files (*.fas *.fasta *.fa)",
-            )
-            if files:
-                self_dz.add_files(files)
+            
+            import platform
+            if platform.system() == "Linux":
+                dialog = QFileDialog(self_dz, "Select FASTA Files", default_dir, "FASTA Files (*.fas *.fasta *.fa)")
+                dialog.setFileMode(QFileDialog.ExistingFiles)
+                dialog.setStyleSheet("""
+                    QWidget { background-color: #FFFFFF; color: #1D1D1F; }
+                    QTreeView, QListView, QTableView { background-color: #FFFFFF; color: #1D1D1F; alternate-background-color: #F2F2F7; outline: none; }
+                    QTreeView::item:selected, QListView::item:selected { background-color: #0071E3; color: #FFFFFF; }
+                    QHeaderView::section { background-color: #F2F2F7; color: #1D1D1F; border: 1px solid #D1D1D6; padding: 4px; }
+                    QPushButton { background-color: #E5E5EA; color: #1D1D1F; border-radius: 4px; padding: 6px 12px; font-weight: bold; }
+                    QPushButton:hover { background-color: #D1D1D6; }
+                    QLineEdit, QComboBox { background-color: #F5F5F7; color: #1D1D1F; border: 1px solid #D1D1D6; padding: 4px; }
+                """)
+                if dialog.exec_():
+                    files = dialog.selectedFiles()
+                    if files:
+                        self_dz.add_files(files)
+            else:
+                files, _ = QFileDialog.getOpenFileNames(
+                    self_dz, "Select FASTA Files", default_dir, "FASTA Files (*.fas *.fasta *.fa)"
+                )
+                if files:
+                    self_dz.add_files(files)
 
         self.dz_fasta._open_file_dialog = types.MethodType(
             custom_fasta_browse, self.dz_fasta
@@ -267,14 +283,32 @@ class Tab3HyPhyUI(QWidget):
                 if t1_st1_logic.CURRENT_PROJECT_PATH
                 else ""
             )
-            files, _ = QFileDialog.getOpenFileNames(
-                self_dz,
-                "Select NWK Files",
-                default_dir,
-                "NWK Files (*.nwk *.tre *.tree)",
-            )
-            if files:
-                self_dz.add_files(files)
+            
+            import platform
+            if platform.system() == "Linux":
+                dialog = QFileDialog(self_dz, "Select NWK Files", default_dir, "NWK Files (*.nwk *.tre *.tree)")
+                dialog.setFileMode(QFileDialog.ExistingFiles)
+                dialog.setStyleSheet("""
+                    QWidget { background-color: #FFFFFF; color: #1D1D1F; }
+                    QTreeView, QListView, QTableView { background-color: #FFFFFF; color: #1D1D1F; alternate-background-color: #F2F2F7; outline: none; }
+                    QTreeView::item:selected, QListView::item:selected { background-color: #0071E3; color: #FFFFFF; }
+                    QHeaderView::section { background-color: #F2F2F7; color: #1D1D1F; border: 1px solid #D1D1D6; padding: 4px; }
+                    QPushButton { background-color: #E5E5EA; color: #1D1D1F; border-radius: 4px; padding: 6px 12px; font-weight: bold; }
+                    QPushButton:hover { background-color: #D1D1D6; }
+                    QLineEdit, QComboBox { background-color: #F5F5F7; color: #1D1D1F; border: 1px solid #D1D1D6; padding: 4px; }
+                """)
+                if dialog.exec_():
+                    files = dialog.selectedFiles()
+                    if files:
+                        self_dz.add_files(files)
+            else:
+                files, _ = QFileDialog.getOpenFileNames(
+                    self_dz, "Select NWK Files", default_dir, "NWK Files (*.nwk *.tre *.tree)"
+                )
+                if files:
+                    self_dz.add_files(files)
+
+        self.dz_nwk._open_file_dialog = types.MethodType(custom_nwk_browse, self.dz_nwk)
 
         self.dz_nwk._open_file_dialog = types.MethodType(custom_nwk_browse, self.dz_nwk)
         input_content_layout.addLayout(dz_layout)
