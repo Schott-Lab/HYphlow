@@ -914,6 +914,20 @@ if __name__ == "__main__":
         font-family: 'Roboto', -apple-system, 'Segoe UI', sans-serif;
         color: #1D1D1F;
     }
+    QTreeView, QListView, QTableView {
+        background-color: #FFFFFF;
+        color: #1D1D1F;
+        selection-background-color: #F2F2F7;
+        selection-color: #1D1D1F;
+    }
+    QHeaderView::section {
+        background-color: #F2F2F7;
+        color: #1D1D1F;
+        border: none;
+        border-right: 1px solid #D1D1D6;
+        border-bottom: 1px solid #D1D1D6;
+        padding: 4px;
+    }
     QLabel#MainTitle { font-size: 24px; font-weight: 800; color: #1D1D1F; background: transparent; border: none; }
     QLabel#SectionHeader { font-size: 20px; font-weight: 700; color: #1D1D1F; background: transparent; border: none; }
     QLabel#SubHeader { font-size: 18px; font-weight: 500; color: #1D1D1F; background: transparent; border: none; }
