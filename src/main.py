@@ -176,7 +176,7 @@ class StartupDialog(QDialog):
 
     def browse_folder(self):
         folder = QFileDialog.getExistingDirectory(
-            self, "Select Project Workspace", options=QFileDialog.DontUseNativeDialog
+            self, "Select Project Workspace"
         )
         if folder:
             self.path_input.setText(folder)
