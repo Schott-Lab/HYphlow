@@ -1,4 +1,4 @@
-# Schott_lab_HYphlow
+# <img src="assets/icon1.png" width="35" align="top"> <img src="assets/icon2.png" width="35" align="top"> Schott_lab_HYphlow
 
 <p align="center">
   <img src="assets/banner.png" alt="HYphlow Banner" width="60%">
