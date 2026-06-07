@@ -1,5 +1,9 @@
 # Schott_lab_HYphlow
 
+<p align="center">
+  <img src="assets/banner.png" alt="HYphlow Banner" width="60%">
+</p>
+
 ## Table of Contents
 * [Overview](#overview)
 * [Data Preparation](#data-preparation)
