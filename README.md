@@ -312,17 +312,19 @@ Currently supported models across all modules include:
 ---
 
 ## Dependencies
-To use the full HYphlow pipeline, ensure the following dependencies are installed.
+To use the full HYphlow pipeline, you can set up your environment using either Conda (recommended) or Pip.
 
-**For HyPhy Execution:**
-The HyPhy engine must be installed and accessible from your command line.
+**Option 1: Using Conda **
+The easiest way to install all dependencies, including the HyPhy engine and Python packages, is to use the provided `environment.yml` file. This creates a dedicated virtual environment.
 ```bash
-conda install -c bioconda hyphy
+conda env create -f environment.yml
+conda activate hyphlow_env
 hyphy --version
 ```
 
-**For Python Modules:**
-The following Python packages are required to run GUI components, parse trees, align data, and generate Excel files.
+**Option 2: Using Pip**
+If you already have the HyPhy engine installed on your system and prefer not to use Conda, you can manually install the required Python GUI and bioinformatics packages using `requirements.txt`.
 ```bash
-pip install pandas biopython ete3 rapidfuzz taxopy xlsxwriter PyQt5
+# Ensure HyPhy is installed first: conda install -c bioconda hyphy
+pip install -r requirements.txt
 ```
