@@ -1,7 +1,11 @@
-# <img src="assets/schott_lab_logo.png" width="40" align="top"> <img src="assets/logo.png" width="50" align="top"> Schott_lab_HYphlow
 
-<img src="assets/banner.png" alt="HYphlow Banner" width="60%" align="left">
+
+<img src="https://github.com/hellojung0810/Schott_lab_HYphlow/blob/main/hyphlow/assets/schott_lab_logo.png" width="40" align="top"> 
+<img src="https://github.com/hellojung0810/Schott_lab_HYphlow/blob/main/hyphlow/assets/logo.png" width="50" align="top"> Schott_lab_HYphlow
+
+<img src="https://github.com/hellojung0810/Schott_lab_HYphlow/blob/main/hyphlow/assets/banner.png" alt="HYphlow Banner" width="60%" align="left">
 <br clear="left"/>
+
 
 ## Table of Contents
 * [Overview](#overview)
