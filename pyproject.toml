@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hyphlow"
+version = "1.0.0"
+description = "Bioinformatics selection analysis pipeline and GUI"
+readme = "README.md"
+authors = [
+    { name = "Jay Kwon" }
+]
+requires-python = ">=3.8"
+dependencies = [
+    "PyQt5",
+    "qtawesome",
+    "pandas",
+    "ete3",
+    "rapidfuzz",
+    "taxopy",
+    "xlsxwriter"
+]
+
+[project.scripts]
+hyphlow = "hyphlow.main:main"
