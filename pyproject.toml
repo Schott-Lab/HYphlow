@@ -24,3 +24,6 @@ dependencies = [
 
 [project.scripts]
 hyphlow = "hyphlow.main:main"
+
+[tool.setuptools]
+packages = ["hyphlow"]
