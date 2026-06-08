@@ -19,10 +19,10 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, pyqtSignal
 import qtawesome as qta
 
-from common_ui import UnifiedDropZone
-import common_utils
-import t1_st1_logic
-import t4_summary_logic
+from hyphlow.common_ui import UnifiedDropZone
+from hyphlow import common_utils
+from hyphlow import t1_st1_logic
+from hyphlow import t4_summary_logic
 
 
 class Tab4SummaryUI(QWidget):
