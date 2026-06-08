@@ -29,16 +29,14 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QRect, QSize, QPoint
 from PyQt5.QtGui import QColor, QPixmap, QFont
 import qtawesome as qta
-import t2_tagging_logic
-
-import common_utils
-import t1_st1_logic
-from common_ui import (
+from hyphlow import t2_tagging_logic
+from hyphlow import common_utils
+from hyphlow import t1_st1_logic
+from hyphlow.common_ui import (
     Popup,
     UnifiedDropZone,
     PrimaryButton,
 )
-
 
 class FlowLayout(QLayout):
     def __init__(self, parent=None, margin=0, spacing=-1):
