@@ -607,7 +607,7 @@ class UnifiedDropZone(QWidget):
     def _open_file_dialog(self):
         default_dir = ""
         try:
-            import t1_st1_logic
+            from hyphlow import t1_st1_logic
 
             if self.open_in_base_dir and getattr(
                 t1_st1_logic, "CURRENT_PROJECT_PATH", None
