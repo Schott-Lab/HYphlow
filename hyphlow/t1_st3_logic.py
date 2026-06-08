@@ -7,8 +7,8 @@ from ete3 import Tree
 import pandas as pd
 import datetime
 
-import common_utils
-import t1_st1_logic
+from hyphlow import common_utils
+from hyphlow import t1_st1_logic
 
 try:
     base = Path(sys._MEIPASS)
