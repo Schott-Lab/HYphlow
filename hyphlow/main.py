@@ -31,14 +31,14 @@ from PyQt5.QtGui import QFont, QColor, QPixmap, QIcon, QPainter, QTextCursor, QP
 from PyQt5.QtCore import Qt, QSettings, pyqtSignal, QTimer, QTime
 import qtawesome as qta
 
-import t1_st1_logic
-from t1_st1_ui import StandardizationPage
-from t1_st4_ui import Subtab4PruningUI
-from t1_st5_ui import Subtab5ReconUI
-from t2_tagging_ui import Tab2TaggingUI
-from t3_hyphy_ui import Tab3HyPhyUI
-from t4_summary_ui import Tab4SummaryUI
-from common_ui import LogConsole
+from hyphlow import t1_st1_logic
+from hyphlow.t1_st1_ui import StandardizationPage
+from hyphlow.t1_st4_ui import Subtab4PruningUI
+from hyphlow.t1_st5_ui import Subtab5ReconUI
+from hyphlow.t2_tagging_ui import Tab2TaggingUI
+from hyphlow.t3_hyphy_ui import Tab3HyPhyUI
+from hyphlow.t4_summary_ui import Tab4SummaryUI
+from hyphlow.common_ui import LogConsole
 
 def get_logo_path():
     try:
