@@ -27,3 +27,6 @@ hyphlow = "hyphlow.main:main"
 
 [tool.setuptools]
 packages = ["hyphlow"]
+
+[tool.setuptools.package-data]
+"hyphlow" = ["assets/*"]
