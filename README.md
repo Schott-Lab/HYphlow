@@ -327,3 +327,21 @@ If you already have the HyPhy engine installed on your system and prefer not to 
 # Ensure HyPhy is installed first: conda install -c bioconda hyphy
 pip install -r requirements.txt
 ```
+
+---
+## Acknowledgements & Dependencies
+
+HYphlow is built upon several excellent open-source tools and libraries. 
+If you use HYphlow in your research, please consider citing the pipeline alongside the following core software that makes this work possible:
+
+* [HyPhy](https://github.com/veg/hyphy/)
+> Kosakovsky Pond, S. L., Poon, A. F. Y., Velazquez, R., Weaver, S., Hepler, N. L., Murrell, B., Shank, S. D., Magalis, B. R., Bouvier, D., Nekrutenko, A., Wisotsky, S., Spielman, S. J., Frost, S. D. W., & Muse, S. V. (2020). HyPhy 2.5—A Customizable Platform for Evolutionary Hypothesis Testing Using Phylogenies. Molecular Biology and Evolution, 37(1), 295–299. https://doi.org/10.1093/molbev/msz197
+
+* [ETE 3](https://etetoolkit.org/)
+> Huerta-Cepas, J., Serra, F., & Bork, P. (2016). ETE 3: Reconstruction, Analysis, and Visualization of Phylogenomic Data. Molecular Biology and Evolution, 33(6), 1635–1638. https://doi.org/10.1093/molbev/msw046
+
+* [pandas](https://pandas.pydata.org/)
+> The pandas development team. (2020). pandas-dev/pandas: Pandas [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.3509134
+
+* [PyQt5](https://riverbankcomputing.com/software/pyqt/)
+> Riverbank Computing Limited. (2026). PyQt5: Python bindings for the Qt cross-platform application framework (Version 5.15) [Computer software]. https://www.riverbankcomputing.com/software/pyqt/
