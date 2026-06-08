@@ -9,7 +9,7 @@ from rapidfuzz import fuzz
 import pandas as pd
 import datetime
 
-import common_utils
+from hyphlow import common_utils
 
 CURRENT_PROJECT_PATH = None
 _taxdb_cache = None
