@@ -24,8 +24,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QPropertyAnimation, QPoint, QTime
 from PyQt5.QtGui import QColor, QPixmap, QPainter, QPen, QIcon, QTextCursor, QFont
 import qtawesome as qta
-import common_utils
-
+from hyphlow import common_utils
 
 class Popup(QDialog):
     def __init__(
