@@ -16,7 +16,7 @@ from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QColor
 import qtawesome as qta
 
-from common_ui import (
+from hyphlow.common_ui import (
     Popup,
     UnifiedDropZone,
     StandardTable,
@@ -25,9 +25,9 @@ from common_ui import (
     ActionButton,
 )
 
-import t1_st1_logic
-import t1_st2_logic
-import t1_st3_logic
+from hyphlow import t1_st1_logic
+from hyphlow import t1_st2_logic
+from hyphlow import t1_st3_logic
 
 
 class ValidationThread(QThread):
