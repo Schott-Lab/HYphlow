@@ -5,6 +5,7 @@ import shutil
 import datetime
 import types
 import traceback
+import subprocess
 from pathlib import Path
 from PyQt5.QtWidgets import (
     QWidget,
@@ -23,7 +24,6 @@ from PyQt5.QtWidgets import (
     QScrollArea,
     QTableWidget,
     QTableWidgetItem,
-    QTextBrowser,
     QComboBox,
     QSizePolicy,
 )
@@ -248,7 +248,6 @@ class Tab3HyPhyUI(QWidget):
                 if t1_st1_logic.CURRENT_PROJECT_PATH
                 else ""
             )
-            
             import platform
             if platform.system() == "Linux":
                 dialog = QFileDialog(self_dz, "Select FASTA Files", default_dir, "FASTA Files (*.fas *.fasta *.fa)")
@@ -283,7 +282,6 @@ class Tab3HyPhyUI(QWidget):
                 if t1_st1_logic.CURRENT_PROJECT_PATH
                 else ""
             )
-            
             import platform
             if platform.system() == "Linux":
                 dialog = QFileDialog(self_dz, "Select NWK Files", default_dir, "NWK Files (*.nwk *.tre *.tree)")
@@ -307,8 +305,6 @@ class Tab3HyPhyUI(QWidget):
                 )
                 if files:
                     self_dz.add_files(files)
-
-        self.dz_nwk._open_file_dialog = types.MethodType(custom_nwk_browse, self.dz_nwk)
 
         self.dz_nwk._open_file_dialog = types.MethodType(custom_nwk_browse, self.dz_nwk)
         input_content_layout.addLayout(dz_layout)
@@ -1124,7 +1120,24 @@ class Tab3HyPhyUI(QWidget):
             self.progress_update.emit("Batch Execution", 100, "Completed")
             self.log_msg.emit("[SUCCESS] HyPhy Analysis Completed successfully!")
             if hasattr(self, "current_work_dir"):
-                os.startfile(self.current_work_dir)
+                try:
+                    if sys.platform == "win32":
+                        os.startfile(self.current_work_dir)
+                    elif sys.platform == "darwin":
+                        subprocess.call(["open", self.current_work_dir], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    else:
+                        try:
+                            res = subprocess.call(["explorer.exe", self.current_work_dir], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            if res != 0:
+                                raise OSError()
+                        except Exception:
+                            res2 = subprocess.call(["xdg-open", self.current_work_dir], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            if res2 != 0:
+                                raise OSError()
+                except Exception:
+                    self.log_msg.emit("[INFO] Analysis completed successfully and all results are safely saved.")
+                    self.log_msg.emit("[INFO] Unable to automatically visualize the output folder due to missing GUI display components in the current environment.")
+                    self.log_msg.emit(f"[INFO] Please manually navigate to: {self.current_work_dir}")
 
             if t1_st1_logic.CURRENT_PROJECT_PATH:
                 try:
