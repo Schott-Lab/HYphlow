@@ -40,12 +40,13 @@ from hyphlow.t3_hyphy_ui import Tab3HyPhyUI
 from hyphlow.t4_summary_ui import Tab4SummaryUI
 from hyphlow.common_ui import LogConsole
 
+
 def get_logo_path():
     try:
         base = Path(sys._MEIPASS)
         return base / "assets" / "logo.png"
     except Exception:
-        return Path(__file__).resolve().parent.parent / "assets" / "logo.png"
+        return Path(__file__).resolve().parent / "assets" / "logo.png"
 
 class SpinnerLabel(QLabel):
     def __init__(self, size=16, color="#0071E3"):
