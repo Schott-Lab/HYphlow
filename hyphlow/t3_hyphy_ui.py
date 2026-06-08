@@ -39,10 +39,10 @@ from PyQt5.QtCore import (
 )
 from PyQt5.QtGui import QFont, QColor, QPainter, QPen, QTextCursor
 import qtawesome as qta
-import t3_hyphy_logic
-import common_utils
-import t1_st1_logic
-from common_ui import (
+from hyphlow import t3_hyphy_logic
+from hyphlow import common_utils
+from hyphlow import t1_st1_logic
+from hyphlow.common_ui import (
     UnifiedDropZone,
     PrimaryButton,
 )
