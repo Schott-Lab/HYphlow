@@ -11,8 +11,8 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 
-import t1_st4_logic
-from common_ui import (
+from hyphlow import t1_st4_logic
+from hyphlow.common_ui import (
     UnifiedDropZone,
     PrimaryButton,
 )

@@ -8,7 +8,7 @@ from rapidfuzz import process, fuzz
 from ete3 import Tree
 import pandas as pd
 
-import common_utils
+from hyphlow import common_utils
 import t1_st1_logic
 
 try:
