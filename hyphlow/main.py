@@ -889,7 +889,7 @@ class HyphlowMain(QMainWindow):
         event.accept()
 
 
-if __name__ == "__main__":
+def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
 
@@ -962,3 +962,6 @@ if __name__ == "__main__":
         sys.exit(app.exec())
     else:
         sys.exit(0)
+
+if __name__ == "__main__":
+    main()
