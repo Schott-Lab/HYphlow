@@ -1,7 +1,5 @@
 import os
 import re
-import sys
-import shutil
 import zipfile
 import subprocess
 from pathlib import Path
@@ -150,54 +148,54 @@ def prep_parallel_tasks(job_list, total_threads):
 
 def generate_bash_script(job_list, threads):
     if not job_list:
-        return "# Please add at least one job to the Batch Queue below."
+        return ""
 
     batches, allocations = prep_parallel_tasks(job_list, threads)
 
-    hyphy_absolute_path = shutil.which("hyphy")
-
     lines = [
         "#!/bin/bash",
-        "# =====================================================================",
-        "# HYphlow Parallel Batch Script (Cross-Platform)",
-        "# =====================================================================",
-        "",
-        "# ---------------------------------------------------------------------",
-        "# [DO NOT EDIT] SYSTEM SETUP BLOCK",
-        "# ---------------------------------------------------------------------",
         "export TOLERATE_NUMERICAL_ERRORS=1",
+        'CACHE_FILE="$HOME/.hyphlow_hyphy_path.txt"',
+        'HYPHY_PATH=""',
+        'if [ -f "$CACHE_FILE" ]; then',
+        '    CACHED_PATH=$(cat "$CACHE_FILE")',
+        '    if [ -x "$CACHED_PATH" ]; then',
+        '        HYPHY_PATH="$CACHED_PATH"',
+        '    fi',
+        'fi',
+        'if [ -z "$HYPHY_PATH" ]; then',
+        '    OS_TYPE=$(uname -s)',
+        '    if command -v conda &> /dev/null || command -v micromamba &> /dev/null; then',
+        '        [ -f ~/.bashrc ] && source ~/.bashrc 2>/dev/null',
+        '        [ -f ~/.zshrc ] && source ~/.zshrc 2>/dev/null',
+        '    fi',
+        '    if command -v hyphy &> /dev/null; then',
+        '        HYPHY_PATH=$(command -v hyphy)',
+        '    else',
+        '        HYPHY_PATH=$(find ~/.local/share/mamba ~/micromamba ~/miniconda3 ~/anaconda3 ~/.conda /usr/local/bin /usr/bin /opt/homebrew/bin -type f -name "hyphy" -executable 2>/dev/null | grep "/bin/hyphy" | head -n 1)',
+        '    fi',
+        '    if [ -n "$HYPHY_PATH" ]; then',
+        '        echo "$HYPHY_PATH" > "$CACHE_FILE"',
+        '    fi',
+        'fi',
+        'if [ -z "$HYPHY_PATH" ]; then',
+        '    echo "[ERROR] HyPhy executable not found! Please ensure it is installed and accessible."',
+        '    exit 1',
+        'fi',
+        'HYPHY_LIB="$(dirname "$(dirname "$HYPHY_PATH")")/share/hyphy"',
+        'export PATH="$(dirname "$HYPHY_PATH"):$PATH"',
+        'HYPHY_EXEC="hyphy"',
+        'echo "Starting HyPhy Parallel pipeline..."\n',
     ]
 
-    if hyphy_absolute_path and sys.platform != "win32":
-        lines.append(f'HYPHY_EXEC="{hyphy_absolute_path}"')
-    else:
-
-        lines.extend([
-            "OS_TYPE=$(uname -s)",
-            "if command -v conda &> /dev/null || command -v micromamba &> /dev/null; then",
-            "    [ -f ~/.bashrc ] && source ~/.bashrc 2>/dev/null",
-            "    [ -f ~/.zshrc ] && source ~/.zshrc 2>/dev/null",
-            "fi",
-            "if command -v hyphy &> /dev/null; then",
-            '    HYPHY_EXEC="hyphy"',
-            "else",
-            '    HYPHY_EXEC=$(find ~/.local/share/mamba ~/micromamba ~/miniconda3 ~/anaconda3 ~/.conda /usr/local/bin /usr/bin /opt/homebrew/bin -type f -name "hyphy" -executable 2>/dev/null | grep "/bin/hyphy" | head -n 1)',
-            "fi"
-        ])
-
-    lines.extend([
-        'if [ -z "$HYPHY_EXEC" ]; then',
-        '    echo "[ERROR] HyPhy executable not found! Please ensure it is installed and accessible."',
-        "    exit 1",
-        "fi",
-        "# ---------------------------------------------------------------------",
-        "",
-        "# =====================================================================",
-        "# [EDITABLE] HYPHY EXECUTION BLOCK",
-        "# Add your custom flags below (e.g., --code Universal)",
-        "# =====================================================================",
-        'echo "Starting HyPhy Parallel pipeline..."\n',
-    ])
+    model_name_map = {
+        "busted": "BUSTED",
+        "absrel": "aBSREL",
+        "fel": "FEL",
+        "meme": "MEME",
+        "fubar": "FUBAR",
+        "relax": "RELAX"
+    }
 
     for b_idx, batch in enumerate(batches):
         lines.append(f'echo "----------------------------------------"')
@@ -209,6 +207,7 @@ def generate_bash_script(job_list, threads):
             f_name = task["f_name"]
             t_name = task["t_name"]
             model = task["model"].lower()
+            model_exact = model_name_map.get(model, model.upper())
             base_name = Path(t_name).stem
             output_name = f"{base_name}_{model.upper()}.JSON"
             error_log = f"{base_name}_{model.upper()}_log.txt"
@@ -217,63 +216,33 @@ def generate_bash_script(job_list, threads):
             trace_key = task["key"]
             lines.append(f'echo "===REACTION_START==={trace_key}==="')
 
-            cmd = f'"$HYPHY_EXEC" {model} --alignment "{f_name}" --tree "{t_name}" --CPU {task_cores} --output "{output_name}"'
+            cmd_a = f'"$HYPHY_PATH" LIBPATH="$HYPHY_LIB" "$HYPHY_LIB/TemplateBatchFiles/SelectionAnalyses/{model_exact}.bf" --alignment "{f_name}" --tree "{t_name}" --CPU {task_cores} --output "{output_name}"'
+            cmd_b = f'"$HYPHY_EXEC" {model} --alignment "{f_name}" --tree "{t_name}" --CPU {task_cores} --output "{output_name}"'
 
             if task["job"].get("has_fg"):
                 if model == "relax":
-                    cmd += " --test FG"
+                    cmd_a += " --test FG"
+                    cmd_b += " --test FG"
                 elif model in ["busted", "absrel", "meme", "fel"]:
-                    cmd += " --branches FG"
+                    cmd_a += " --branches FG"
+                    cmd_b += " --branches FG"
                 if model == "busted":
-                    cmd += " --srv Yes"
+                    cmd_a += " --srv Yes"
+                    cmd_b += " --srv Yes"
 
             bash_logic = (
-                f'({cmd} 2>&1 | tee "{error_log}"; '
-                f"if [ ${{PIPESTATUS[0]}} -eq 0 ]; then "
+                f'( '
+                f'{cmd_a} 2>&1 | tee "{error_log}"; '
+                f'STATUS=${{PIPESTATUS[0]}}; '
+                f'if [ $STATUS -ne 0 ]; then '
+                f'echo "[WARNING] Plan A (Absolute Path) failed for {model.upper()}. Retrying with Plan B (Standard)..." | tee -a "{error_log}"; '
+                f'{cmd_b} 2>&1 | tee -a "{error_log}"; '
+                f'STATUS=${{PIPESTATUS[0]}}; '
+                f'fi; '
+                f'if [ $STATUS -eq 0 ]; then '
                 f'echo "===REACTION_DONE==={trace_key}==="; '
-                f'else echo "===REACTION_ERROR==={trace_key}==="; fi) &'
-            )
-            lines.append(bash_logic)
-
-        lines.append("wait")
-        lines.append(f'echo "Batch {b_idx + 1} completed."\n')
-
-    lines.append('echo "All tasks completed successfully!"\n')
-    return "\n".join(lines)
-
-    for b_idx, batch in enumerate(batches):
-        lines.append(f'echo "----------------------------------------"')
-        lines.append(
-            f'echo "Starting Batch {b_idx + 1}/{len(batches)} (Parallel Execution)..."'
-        )
-
-        for task in batch:
-            f_name = task["f_name"]
-            t_name = task["t_name"]
-            model = task["model"].lower()
-            base_name = Path(t_name).stem
-            output_name = f"{base_name}_{model.upper()}.JSON"
-            error_log = f"{base_name}_{model.upper()}_log.txt"
-            task_cores = allocations[task["key"]]
-
-            trace_key = task["key"]
-            lines.append(f'echo "===REACTION_START==={trace_key}==="')
-
-            cmd = f'"$HYPHY_EXEC" {model} --alignment "{f_name}" --tree "{t_name}" --CPU {task_cores} --output "{output_name}"'
-
-            if task["job"].get("has_fg"):
-                if model == "relax":
-                    cmd += " --test FG"
-                elif model in ["busted", "absrel", "meme", "fel"]:
-                    cmd += " --branches FG"
-                if model == "busted":
-                    cmd += " --srv Yes"
-
-            bash_logic = (
-                f'({cmd} 2>&1 | tee "{error_log}"; '
-                f"if [ ${{PIPESTATUS[0]}} -eq 0 ]; then "
-                f'echo "===REACTION_DONE==={trace_key}==="; '
-                f'else echo "===REACTION_ERROR==={trace_key}==="; fi) &'
+                f'else echo "===REACTION_ERROR==={trace_key}==="; fi '
+                f') &'
             )
             lines.append(bash_logic)
 
