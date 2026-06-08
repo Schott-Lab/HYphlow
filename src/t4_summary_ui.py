@@ -1,5 +1,7 @@
 import os
+import sys
 import json
+import subprocess
 from pathlib import Path
 from PyQt5.QtWidgets import (
     QWidget,
@@ -311,7 +313,24 @@ class Tab4SummaryUI(QWidget):
                 )
             else:
                 self.log_msg.emit(f"[SUCCESS] Excel report exported to: {res['path']}")
-                os.startfile(res["path"])
+                try:
+                    if sys.platform == "win32":
+                        os.startfile(res["path"])
+                    elif sys.platform == "darwin":
+                        subprocess.call(["open", res["path"]], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    else:
+                        try:
+                            r = subprocess.call(["explorer.exe", res["path"]], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            if r != 0:
+                                raise OSError()
+                        except Exception:
+                            r2 = subprocess.call(["xdg-open", res["path"]], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            if r2 != 0:
+                                raise OSError()
+                except Exception:
+                    self.log_msg.emit("[INFO] Excel report saved successfully.")
+                    self.log_msg.emit("[INFO] Unable to automatically open the file due to missing GUI display components in the current environment.")
+                    self.log_msg.emit(f"[INFO] Please manually open: {res['path']}")
         else:
             solution = get_solution(main_type)
             console_msg = f"Failed to export Excel | [{main_type}] {main_msg}\n{solution}\nTraceback:\n{main_tb}"
