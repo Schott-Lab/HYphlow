@@ -17,16 +17,15 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor
 import qtawesome as qta
 
-import t1_st5_logic
-import t1_st1_logic
-import common_utils
-from common_ui import (
+from hyphlow import t1_st5_logic
+from hyphlow import t1_st1_logic
+from hyphlow import common_utils
+from hyphlow.common_ui import (
     UnifiedDropZone,
     TableCheckBoxWidget,
     PrimaryButton,
     ActionButton,
 )
-
 
 def create_status_badge(text, bg_color, text_color):
     wrapper = QWidget()
