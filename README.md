@@ -13,14 +13,11 @@ It provides a structured workflow for species label standardization, tree prunin
 
 * [Setup & Installation](#setup--installation)
 * [Workflow & Usage](#workflow--usage) 
-  * [Data Preparation](#data-preparation)
-  * [Tree Annotation](#tree-annotation)
-  * [HyPhy Execution](#hyphy-execution)
-  * [Results Summary](#results-summary)
 * [Supported HyPhy Models](#supported-hyphy-models)
 * [Acknowledgements & Dependencies](#acknowledgements--dependencies)
-* [Contribution & Support](#contribution--support) 
-* [License](#license)  
+* [Author & Credits](#author--credits)
+* [Support & Contribution](#support--contribution) 
+* [License](#license)
 
 ---
 
@@ -129,7 +126,19 @@ HYphlow is built using several open-source tools and libraries. If you use HYphl
 * **FEL & SLAC:** Kosakovsky Pond, S. L., & Frost, S. D. W. (2005). Not So Different After All: A Comparison of Methods for Detecting Amino Acid Sites Under Selection. *Molecular Biology and Evolution*, 22(5), 1208–1222.
 * **MEME:** Murrell, B., et al. (2012). Detecting Individual Sites Subject to Episodic Diversification. *PLoS Genetics*, 8(7), e1002764.
 * **FUBAR:** Murrell, B., et al. (2013). FUBAR: A Fast, Unconstrained Bayesian AppRoximation for Inferring Selection. *Molecular Biology and Evolution*, 30(5), 1196–1205.
+---
 
+## Author & Credits
+
+**HYphlow** was designed and developed by **Hyejung (Jay) Kwon** at the [Schott Lab: Evolution and Development of Vertebrate Visual Systems](https://www.yorku.ca/science/schott/), under the supervision of **Dr. Ryan K Schott**.
+
+Logo designed by **Taegan Perez**.
+
+Special thanks to the members of the **Schott Lab** for their feedback and support throughout the development of this project.
+
+If you use this pipeline in your research, please link back to this repository and cite or acknowledge HYphlow where appropriate.
+
+---
 ## Support & Contribution
 
 Bug reports, feature requests, and code contributions are welcome through GitHub Issues and Pull Requests.
