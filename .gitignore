@@ -1,0 +1,19 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / Packaging
+build/
+dist/
+*.egg-info/
+
+# Environments
+venv/
+env/
+hyphlow_env/
+.conda/
+
+# OS generated files
+.DS_Store
+Thumbs.db
