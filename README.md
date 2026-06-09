@@ -1,347 +1,141 @@
-# <img src="https://github.com/hellojung0810/Schott_lab_HYphlow/blob/main/hyphlow/assets/schott_lab_logo.png" width="40" align="top"> <img src="https://github.com/hellojung0810/Schott_lab_HYphlow/blob/main/hyphlow/assets/logo.png" width="50" align="top"> Schott_lab_HYphlow
-<img src="https://github.com/hellojung0810/Schott_lab_HYphlow/blob/main/hyphlow/assets/banner.png" alt="HYphlow Banner" width="60%" align="left">
-<br clear="left"/>
+# HYphlow
+
+[![PyPI version](https://img.shields.io/pypi/v/hyphlow.svg)](https://pypi.org/project/hyphlow/)
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+HYphlow is a GUI-based bioinformatics pipeline that supports evolutionary selection pressure analysis using HyPhy. 
+It provides a structured workflow for species label standardization, tree pruning, data reconciliation, branch annotation, batch HyPhy execution, and result extraction from HyPhy JSON output files.
+
+---
 
 ## Table of Contents
-* [Overview](#overview)
-* [Data Preparation](#data-preparation)
-  * [Species Label Standardization](#species-label-standardization)
-  * [Tree Pruning](#tree-pruning)
-  * [Data Reconciliation](#data-reconciliation)
-* [Tree Annotation](#tree-annotation)
-* [HyPhy Execution](#hyphy-execution)
-* [Results Summary](#results-summary)
+
+* [Setup & Installation](#setup--installation)
+* [Workflow & Usage](#workflow--usage) 
+  * [Data Preparation](#data-preparation)
+  * [Tree Annotation](#tree-annotation)
+  * [HyPhy Execution](#hyphy-execution)
+  * [Results Summary](#results-summary)
 * [Supported HyPhy Models](#supported-hyphy-models)
-* [Dependencies](#dependencies)
+* [Acknowledgements & Dependencies](#acknowledgements--dependencies)
+* [Contribution & Support](#contribution--support) 
+* [License](#license)  
 
 ---
 
-## Overview
+## Setup & Installation
 
-HYphlow is a streamlined workflow for preparing input files, annotating foreground branches, running batch HyPhy analyses, and summarizing results for multiple genes.
+HYphlow requires Python 3.8+ and [HyPhy](https://github.com/veg/hyphy). You can either install the required dependencies into an existing Conda environment or create a clean environment for HYphlow.
 
+### Option 1: Existing Conda Environment
+
+Use this option if you already have a Conda environment activated and want to add the required HYphlow dependencies:
+
+```bash
+conda env update -f https://raw.githubusercontent.com/hellojung0810/Schott_lab_HYphlow/refs/heads/main/environment.yml
+```
+
+```bash
+pip install hyphlow
+```
+
+### Option 2: New Conda Environment
+
+Use this option to create a clean environment for HYphlow:
+
+```bash
+conda env create -f https://raw.githubusercontent.com/hellojung0810/Schott_lab_HYphlow/refs/heads/main/environment.yml
+```
+
+```bash
+conda activate hyphlow_env
+```
+
+```bash
+pip install hyphlow
+```
+
+## Workflow & Usage
+
+Once installed, verify the setup and launch the graphical interface by running:
+
+```bash
+hyphlow
+```
 ---
 
-## Data Preparation
+The HYphlow interface guides users through four sequential modules that support data preparation, branch annotation, HyPhy execution, and result summarization. 
 
-### Species Label Standardization
-The Species Label Standardization module checks species names in CSV metadata against the NCBI taxonomy database and standardizes FASTA and Newick labels into a consistent format.
+### 1. Data Preparation
 
-CSV metadata files are used to validate species names using NCBI taxonomy. FASTA headers and Newick tree labels are then formatted to remove extra information, such as accession numbers and trailing tags, extracting clean and consistent species or subspecies labels.
+Prepares standardized, and reconciled input files before evolutionary selection analysis.
 
-**Key Features**
-* **Compares species names** in the CSV metadata file with the NCBI taxonomy database.
-* **Identifies valid, similar, missing, or unmatched** species names.
-* **Supports automatic correction** for similar species names when possible.
-* **Formats FASTA headers** by using the gene name to truncate unnecessary strings, retaining clean species/subspecies labels.
-* **Formats Newick tree leaf names** into a consistent species/subspecies structure.
-* **Automatically recognizes trinomial nomenclature** to support and preserve valid subspecies names.
-* **Removes extra accession numbers** (e.g., XM_, NM_) or unnecessary label information.
-* **Generates standardized files** with `_fmt` tags and detailed Excel validation reports for downstream analysis.
+* **Species Label Standardization:** Cross-references CSV metadata with the NCBI taxonomy database and standardizes FASTA headers and Newick leaf names. It extracts clean species or subspecies labels from longer sequence headers. 
 
-**Input**
-Use a CSV metadata file, FASTA alignment file, and Newick tree file.
-```text
-trait_metadata.csv
-gene_alignment.fasta
-gene_tree.nwk
-```
+* **Tree Pruning:** Generates gene-specific Newick trees by pruning a master species tree to match the taxa present in each FASTA alignment.
 
-Example CSV metadata:
-```text
-species,trait
-Terrapene carolina,terrestrial
-Chrysemys picta bellii,freshwater
-Chelonia mydas,marine
-```
+* **Data Reconciliation:** Checks for missing or mismatched taxa across CSV, FASTA, and Newick files.
 
-Example FASTA headers before standardization:
-```text
->Terrapene_carolina_OPN3_XM_024203557
-ATGCGT...
->Chrysemys_picta_bellii_OPN3_XM_005301234
-ATGCGT...
-```
+### 2. Tree Annotation
 
-Example FASTA headers after standardization:
-```text
->Terrapene_carolina
-ATGCGT...
->Chrysemys_picta_bellii
-ATGCGT...
-```
+Automates foreground branch annotation based on trait metadata.
 
-**Output**
-The module generates validated metadata, standardized FASTA files, standardized Newick files, and detailed Excel reports.
-```text
-trait_metadata_fmt_v1_MMDD.csv
-gene_alignment_fmt_v1_MMDD.fasta
-gene_tree_fmt_v1_MMDD.nwk
-Rpt_trait_metadata_fmt_v1_MMDD.xlsx
-Rpt_gene_alignment_fmt_v1_MMDD.xlsx
-Rpt_gene_tree_fmt_v1_MMDD.xlsx
-```
-These standardized files can be used directly in the Tree Pruning, Data Reconciliation, and Tree Annotation modules.
+* Identifies candidate foreground branches using parsimony and likelihood-based methods.
+* Outputs foreground-annotated Newick trees and annotated SVG preview images.
 
-### Tree Pruning
-The Tree Pruning module generates gene-specific Newick trees by pruning a master tree based on the taxa present in each FASTA alignment file.
+### 3. HyPhy Execution
 
-When running phylogenetic analyses for multiple genes, each gene alignment may contain a different set of species. This module reduces manual work by automatically removing taxa that are not present in the FASTA file, producing a matching tree for each alignment.
+Supports batch execution of HyPhy analyses across multiple genes.
 
-**Key Features**
-* **Uses a master Newick tree** as the reference tree.
-* **Reads species labels** from FASTA alignment files.
-* **Removes tree leaves** that are not present in the FASTA file.
-* **Generates gene-specific** pruned Newick trees.
-* **Checks whether FASTA taxa** are present in the master tree.
-* **Reports missing or unmatched taxa** to prevent execution errors.
-* **Saves pruned trees** for downstream HyPhy analyses.
+* Automatically matches FASTA alignments with their corresponding Newick trees.
+* Configures CPU and thread settings for parallel execution.
+* Generates an editable bash script for running selected HyPhy models.
 
-**Input**
-Use a master Newick tree and one or more FASTA alignment files. 
-For FASTA files, it is recommended to use the formatted outputs generated from the Standardization step.
-```text
-Master_Species_Tree.nwk
-GeneName_aln_fmt_v1_MMDD.fasta
-AnotherGene_aln_fmt_v1_MMDD.fasta
-```
+### 4. Results Summary
 
-Example FASTA file:
-```text
->Species_A
-ATGCGT...
->Species_B
-ATGCGT...
->Species_C
-ATGCGT...
-```
+Extracts and organizes results from HyPhy JSON output files.
 
-Example master tree:
-```text
-(Species_A,Species_B,Species_C,Species_D,Species_E);
-```
-
-**Output**
-The module generates pruned Newick trees that match the taxa in each FASTA alignment, along with detailed Excel reports.
-```text
-GeneName_prn_v1_MMDD.nwk
-AnotherGene_prn_v1_MMDD.nwk
-Rpt_GeneName_prn_v1_MMDD.xlsx
-Rpt_AnotherGene_prn_v1_MMDD.xlsx
-```
-The pruned trees can be used directly in the Data Reconciliation and Tree Annotation modules.
-
-### Data Reconciliation
-The Data Reconciliation module checks and standardizes species labels across CSV, FASTA, and Newick tree files.
-
-When preparing comparative or phylogenetic analyses, species names often appear in different formats across input files. For example, the same species may appear with extra sequence IDs in FASTA headers, different spellings in CSV files, or inconsistent labels in Newick trees. This module helps identify and correct these mismatches before running downstream analyses.
-
-**Key Features**
-* **Checks species names** in CSV files against the NCBI taxonomy database.
-* **Standardizes FASTA headers** into species-level labels.
-* **Standardizes Newick tree leaf names** into species-level labels.
-* **Compares species labels** across CSV, FASTA, and Newick files.
-* **Identifies missing or mismatched taxa** between input files.
-* **Supports automatic correction** for similar species names when possible.
-* **Generates cleaned input files** for downstream analysis.
-* **Saves validation and reconciliation reports** for review.
-
-**Input**
-Use CSV, FASTA, and Newick tree files that contain overlapping species labels. 
-For FASTA and NWK files, it is recommended to use the formatted or pruned outputs generated from the previous Data Preparation steps.
-```text
-trait_data.csv
-GeneName_aln_fmt_v1_MMDD.fasta
-GeneName_prn_v1_MMDD.nwk
-```
-
-The CSV file should include a species column.
-```text
-species,trait
-Species_A,nocturnal
-Species_B,diurnal
-Species_C,nocturnal
-```
-
-The FASTA file may contain longer sequence headers.
-```text
->Species_A_gene1
-ATGCGT...
->Species_B_gene1
-ATGCGT...
-```
-
-The Newick tree should contain matching species labels.
-```text
-(Species_A,Species_B,Species_C);
-```
-
-**Output**
-The module generates standardized files and detailed Excel reconciliation reports.
-```text
-GeneName_aln_rec_v1_MMDD.fasta
-GeneName_tree_rec_v1_MMDD.nwk
-Rpt_GeneName_Reconciliation_Details_MMDD.xlsx
-```
-These cleaned files can be used directly in the Tree Annotation and HyPhy Execution modules.
-
----
-
-## Tree Annotation
-The Tree Annotation module uses CSV trait data to automatically add foreground labels (`{FG}`) to a Newick tree file.
-
-When preparing HyPhy analyses, users often need to manually decide which branches should be treated as foreground branches. This module helps automate that step by comparing trait information across the tree and generating a foreground-annotated Newick file based on ancestral state reconstruction.
-
-**Key Features**
-* **Uses CSV trait data** and a matching Newick tree file automatically.
-* **Allows users to choose** the target trait columns and foreground phenotypic values.
-* **Identifies candidate foreground branches** using Fitch, Sankoff, and Felsenstein ML algorithms.
-* **Generates scalable preview images (SVG)** for each method and the final consensus.
-* **Saves a foreground-annotated** Newick file ready for HyPhy execution.
-* **Exports a detailed CSV report** scoring internal nodes.
-
-**Supported Annotation Methods**
-Currently supported methods include:
-* Fitch parsimony
-* Sankoff parsimony
-* Felsenstein likelihood
-* Strict Consensus
-
-**Input**
-Use a trait CSV file and a matching reconciled Newick tree file:
-```text
-trait_data.csv
-GeneName_tree_rec_v1_MMDD.nwk
-```
-
-Example CSV format:
-```text
-species,trait
-Species_A,nocturnal
-Species_B,nocturnal
-Species_C,diurnal
-Species_D,diurnal
-```
-
-**Output**
-The module generates an annotated Newick tree, preview images, and a report:
-```text
-GeneName_tree_annotated_Strict_Consensus.nwk
-GeneName_tree_annotated_figure.svg
-Rpt_GeneName_tree_annotated_MMDD.csv
-```
-The annotated Newick tree can be used directly in the HyPhy Execution module.
-
----
-
-## HyPhy Execution
-The HyPhy Execution module generates and runs batch HyPhy analysis scripts using matched FASTA alignment files and Newick tree files. 
-
-When analyzing multiple genes, users often need to prepare separate HyPhy commands for each alignment and tree pair. This module reduces that manual work by matching input files, generating execution scripts, and supporting parallel HyPhy analyses.
-
-**Key Features**
-* **Matches FASTA alignment files** with corresponding Newick tree files automatically.
-* **Supports batch execution** of multiple HyPhy analyses in parallel.
-* **Supports both all-branch** analysis and foreground-branch analysis.
-* **Generates an editable** HyPhy execution bash script.
-* **Allows users to adjust CPU/thread** settings before running analyses.
-* **Checks input files** before execution and reports potential file-matching issues.
-* **Saves HyPhy output files** and detailed log reports for downstream review.
-
-**Input**
-Use matched FASTA alignment files and Newick tree files:
-```text
-GeneName_aln_rec_v1_MMDD.fasta
-GeneName_tree_rec_v1_MMDD.nwk
-```
-
-For foreground-branch analyses, use Newick tree files that contain foreground branch labels (`{FG}`):
-```text
-GeneName_tree_annotated_Strict_Consensus.nwk
-```
-
-**Output**
-The module generates HyPhy JSON result files and individual log reports:
-```text
-GeneName_aln_rec_v1_MMDD_BUSTED.json
-GeneName_aln_rec_v1_MMDD_BUSTED_log.txt
-```
-
----
-
-## Results Summary
-The Results Summary module extracts key results from HyPhy `.json` output files and saves them into a single Excel summary file.
-
-When running HyPhy analyses for multiple genes, users often need to open many JSON files manually to check p-values, LRT scores, and significant branches. This module reduces that manual work by collecting the main results automatically.
-
-**Key Features**
-* **Drag and drop** HyPhy `.json` result files directly into the interface.
-* **Detects the HyPhy model** used for each file automatically.
-* **Extracts model-specific** summary results efficiently.
-* **Saves all extracted results** into a single Excel workbook.
-* **Organizes results** into separate sheets by HyPhy model.
-* **Highlights significant results** automatically (e.g., p-value < 0.05).
-* **Shows parsing errors** or skipped files clearly in the log console.
-
-**Input**
-Use the final `.json` output files generated by the HyPhy Execution module:
-```text
-GeneName_aln_rec_v1_MMDD_BUSTED.json
-GeneName_aln_rec_v1_MMDD_RELAX.json
-```
-
-**Output**
-The module generates a single organized Excel workbook:
-```text
-HyPhy_results_summary_MMDD.xlsx
-```
+* Allows users to drag and drop multiple HyPhy .json output files into the interface.
+* Extracts key statistics such as p-values and LRT scores.
+* Compiles extracted results into a single organized Excel workbook.
 
 ---
 
 ## Supported HyPhy Models
-Currently supported models across all modules include:
-* BUSTED
-* aBSREL
-* RELAX
-* FEL
-* MEME
-* FUBAR
-* SLAC
+
+HYphlow currently supports data preparation, execution, and result summarization for the following models:
+
+* **Gene-Level Models:** [BUSTED](https://help.datamonkey.org/methods/busted.html#references), [RELAX](https://help.datamonkey.org/methods/relax.html#relax-method-documentation)
+* **Branch-Level Models:** [aBSREL](https://help.datamonkey.org/methods/absrel.html#absrel-adaptive-branch-site-random-effects-likelihood)
+* **Site-Level Models:** [FEL](https://help.datamonkey.org/methods/fel.html#fixed-effects-likelihood-fel), [SLAC](https://help.datamonkey.org/methods/slac.html#single-likelihood-ancestor-counting-slac), [MEME](https://help.datamonkey.org/methods/meme.html#meme-mixed-effects-model-of-evolution), [FUBAR](https://help.datamonkey.org/methods/fubar.html#fast-unconstrained-bayesian-approximation-fubar)
 
 ---
 
-## Dependencies
-To use the full HYphlow pipeline, you can set up your environment using either Conda (recommended) or Pip.
-
-**Option 1: Using Conda **
-The easiest way to install all dependencies, including the HyPhy engine and Python packages, is to use the provided `environment.yml` file. This creates a dedicated virtual environment.
-```bash
-conda env create -f environment.yml
-conda activate hyphlow_env
-hyphy --version
-```
-
-**Option 2: Using Pip**
-If you already have the HyPhy engine installed on your system and prefer not to use Conda, you can manually install the required Python GUI and bioinformatics packages using `requirements.txt`.
-```bash
-# Ensure HyPhy is installed first: conda install -c bioconda hyphy
-pip install -r requirements.txt
-```
-
----
 ## Acknowledgements & Dependencies
 
-HYphlow is built upon several excellent open-source tools and libraries. 
-If you use HYphlow in your research, please consider citing the pipeline alongside the following core software that makes this work possible:
+HYphlow is built using several open-source tools and libraries. If you use HYphlow in your research, please cite HYphlow alongside the relevant core software used in your analysis:
 
-* [HyPhy](https://github.com/veg/hyphy/)
-> Kosakovsky Pond, S. L., Poon, A. F. Y., Velazquez, R., Weaver, S., Hepler, N. L., Murrell, B., Shank, S. D., Magalis, B. R., Bouvier, D., Nekrutenko, A., Wisotsky, S., Spielman, S. J., Frost, S. D. W., & Muse, S. V. (2020). HyPhy 2.5—A Customizable Platform for Evolutionary Hypothesis Testing Using Phylogenies. Molecular Biology and Evolution, 37(1), 295–299. https://doi.org/10.1093/molbev/msz197
+### Core Software
+* **[HyPhy](https://github.com/veg/hyphy/):** Kosakovsky Pond, S. L., et al. (2020). HyPhy 2.5—A Customizable Platform for Evolutionary Hypothesis Testing Using Phylogenies. *Molecular Biology and Evolution*, 37(1), 295–299.
+* **[ETE 3](https://etetoolkit.org/):** Huerta-Cepas, J., Serra, F., & Bork, P. (2016). ETE 3: Reconstruction, Analysis, and Visualization of Phylogenomic Data. *Molecular Biology and Evolution*, 33(6), 1635–1638. 
+* **[pandas](https://pandas.pydata.org/):** The pandas development team. (2020). pandas-dev/pandas: Pandas [Computer software]. Zenodo.
+* **[PyQt5](https://riverbankcomputing.com/software/pyqt/):** Riverbank Computing Limited. (2026). PyQt5: Python bindings for the Qt cross-platform application framework.
 
-* [ETE 3](https://etetoolkit.org/)
-> Huerta-Cepas, J., Serra, F., & Bork, P. (2016). ETE 3: Reconstruction, Analysis, and Visualization of Phylogenomic Data. Molecular Biology and Evolution, 33(6), 1635–1638. https://doi.org/10.1093/molbev/msw046
+### Evolutionary Models
+* **BUSTED:** Murrell, B., et al. (2015). Gene-Wide Identification of Episodic Selection. *Molecular Biology and Evolution*, 32(5), 1365–1371.
+* **aBSREL:** Smith, M. D., et al. (2015). Less Is More: An Adaptive Branch-Site Random Effects Model for Evolutionary Trajectories. *Molecular Biology and Evolution*, 32(5), 1342–1353.
+* **RELAX:** Wertheim, J. O., et al. (2015). RELAX: Detecting Relaxed Selection in a Phylogenetic Framework. *Molecular Biology and Evolution*, 32(3), 820–832.
+* **FEL & SLAC:** Kosakovsky Pond, S. L., & Frost, S. D. W. (2005). Not So Different After All: A Comparison of Methods for Detecting Amino Acid Sites Under Selection. *Molecular Biology and Evolution*, 22(5), 1208–1222.
+* **MEME:** Murrell, B., et al. (2012). Detecting Individual Sites Subject to Episodic Diversification. *PLoS Genetics*, 8(7), e1002764.
+* **FUBAR:** Murrell, B., et al. (2013). FUBAR: A Fast, Unconstrained Bayesian AppRoximation for Inferring Selection. *Molecular Biology and Evolution*, 30(5), 1196–1205.
 
-* [pandas](https://pandas.pydata.org/)
-> The pandas development team. (2020). pandas-dev/pandas: Pandas [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.3509134
+## Support & Contribution
 
-* [PyQt5](https://riverbankcomputing.com/software/pyqt/)
-> Riverbank Computing Limited. (2026). PyQt5: Python bindings for the Qt cross-platform application framework (Version 5.15) [Computer software]. https://www.riverbankcomputing.com/software/pyqt/
+Bug reports, feature requests, and code contributions are welcome through GitHub Issues and Pull Requests.
+
+---
+
+## License
+
+HYphlow is distributed under the MIT License. See the `LICENSE` file for details.
