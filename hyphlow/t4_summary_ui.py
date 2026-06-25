@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import subprocess
+import datetime
 from pathlib import Path
 from PyQt5.QtWidgets import (
     QWidget,
@@ -15,11 +16,12 @@ from PyQt5.QtWidgets import (
     QHeaderView,
     QScrollArea,
     QSizePolicy,
+    QLineEdit,
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 import qtawesome as qta
 
-from hyphlow.common_ui import UnifiedDropZone
+from hyphlow.common_ui import UnifiedDropZone, PrimaryButton
 from hyphlow import common_utils
 from hyphlow import t1_st1_logic
 from hyphlow import t4_summary_logic
@@ -31,6 +33,7 @@ class Tab4SummaryUI(QWidget):
     def __init__(self):
         super().__init__()
         self.json_files = []
+        self.excel_files = []
         self.file_status_labels = {}
         self._setup_ui()
 
@@ -53,13 +56,13 @@ class Tab4SummaryUI(QWidget):
         header_vbox = QVBoxLayout()
         header_vbox.setSpacing(4)
 
-        header_lbl = QLabel("Results Summary")
+        header_lbl = QLabel("Results Summary & Visualization")
         header_lbl.setObjectName("SectionHeader")
         header_lbl.setStyleSheet("border: none; background: transparent;")
         header_vbox.addWidget(header_lbl)
 
         desc_lbl = QLabel(
-            "Extracts key results from HyPhy analysis outputs and compiles them into a single Excel summary file."
+            "Parse Triplicate JSON outputs into Excel reports and generate publication-ready SVG visualizations."
         )
         desc_lbl.setObjectName("SubText")
         desc_lbl.setStyleSheet("border: none; background: transparent;")
@@ -77,9 +80,11 @@ class Tab4SummaryUI(QWidget):
         ic_layout.setSpacing(10)
 
         input_header = QHBoxLayout()
-        lbl_input_title = QLabel("JSON File Input")
+        lbl_input_title = QLabel("1. JSON File Input")
         lbl_input_title.setObjectName("SubHeader")
-        lbl_input_title.setStyleSheet("border: none; background: transparent;")
+        lbl_input_title.setStyleSheet(
+            "border: none; background: transparent; font-weight: bold;"
+        )
         input_header.addWidget(lbl_input_title)
         input_header.addStretch()
         ic_layout.addLayout(input_header)
@@ -99,23 +104,14 @@ class Tab4SummaryUI(QWidget):
             self.dz_json.scroll_area.setMaximumHeight(200)
 
         ic_layout.addWidget(self.dz_json)
-        main_layout.addWidget(self.input_card)
 
         table_card = QFrame()
         table_card.setStyleSheet(
-            "QFrame { background-color: #FFFFFF; border: 1px solid #E5E5EA; border-radius: 10px; }"
+            "QFrame { background-color: transparent; border: none; }"
         )
         tc_layout = QVBoxLayout(table_card)
-        tc_layout.setContentsMargins(15, 15, 15, 15)
+        tc_layout.setContentsMargins(0, 5, 0, 0)
         tc_layout.setSpacing(10)
-
-        tc_header = QHBoxLayout()
-        overview_lbl = QLabel("Loaded Results Overview")
-        overview_lbl.setObjectName("SubHeader")
-        overview_lbl.setStyleSheet("border: none; background: transparent;")
-        tc_header.addWidget(overview_lbl)
-        tc_header.addStretch()
-        tc_layout.addLayout(tc_header)
 
         self.status_table = QTableWidget(0, 4)
         self.status_table.setHorizontalHeaderLabels(
@@ -140,7 +136,13 @@ class Tab4SummaryUI(QWidget):
         tc_layout.addWidget(self.status_table)
 
         btn_layout = QHBoxLayout()
-        btn_layout.addStretch()
+        self.input_custom_name = QLineEdit()
+        self.input_custom_name.setPlaceholderText("Custom Report Name (Optional)")
+        self.input_custom_name.setFixedHeight(44)
+        self.input_custom_name.setStyleSheet("""
+            QLineEdit { border: 1px solid #D1D1D6; border-radius: 6px; padding: 8px; background: #FAFAFA; font-size: 13px; }
+        """)
+        btn_layout.addWidget(self.input_custom_name)
 
         self.btn_export = QPushButton(" Export to Excel")
         self.btn_export.setIcon(qta.icon("mdi.file-excel", color="#FFFFFF"))
@@ -156,7 +158,40 @@ class Tab4SummaryUI(QWidget):
         btn_layout.addWidget(self.btn_export)
 
         tc_layout.addLayout(btn_layout)
-        main_layout.addWidget(table_card, stretch=1)
+        ic_layout.addWidget(table_card)
+        main_layout.addWidget(self.input_card)
+
+        self.viz_card = QFrame()
+        self.viz_card.setStyleSheet(
+            "QFrame { background-color: #FFFFFF; border: 1px solid #E5E5EA; border-radius: 10px; }"
+        )
+        viz_layout = QVBoxLayout(self.viz_card)
+        viz_layout.setContentsMargins(15, 15, 15, 15)
+        self.viz_card.setEnabled(False)
+
+        viz_layout.addWidget(
+            QLabel(
+                "2. Visualize Results (SVG)",
+                styleSheet="font-weight: bold; border: none; background: transparent;",
+            )
+        )
+
+        self.dz_excel = UnifiedDropZone(
+            [".xlsx"],
+            "Summary Excel Reports",
+            file_type="summary",
+            show_gene_input=False,
+        )
+        self.dz_excel.files_updated.connect(self.handle_excel_drop)
+        viz_layout.addWidget(self.dz_excel)
+
+        self.btn_viz = PrimaryButton(
+            " Generate SVG Plots & Source Data", "mdi.chart-scatter-plot"
+        )
+        self.btn_viz.clicked.connect(self.run_visualization)
+        viz_layout.addWidget(self.btn_viz)
+
+        main_layout.addWidget(self.viz_card)
 
         self.global_scroll.setWidget(scroll_content)
         master_layout.addWidget(self.global_scroll)
@@ -225,6 +260,12 @@ class Tab4SummaryUI(QWidget):
         else:
             self.btn_export.setEnabled(False)
 
+    def handle_excel_drop(self, files):
+        self.excel_files = files
+        self.log_msg.emit(
+            f"[INFO] Loaded {len(files)} Excel file(s) for visualization."
+        )
+
     def export_to_excel(self):
         if not self.json_files:
             return
@@ -235,13 +276,9 @@ class Tab4SummaryUI(QWidget):
             )
             return
 
-        out_dir = common_utils.get_pipeline_path(
-            t1_st1_logic.CURRENT_PROJECT_PATH, "Results", "SUMMARY"
-        )
-
-        save_path, _ = common_utils.generate_smart_filename(
-            "HyPhy_Summary_Report", "SUMMARY", out_dir, ".xlsx", is_report=False
-        )
+        out_dir = t1_st1_logic.CURRENT_PROJECT_PATH / "Results" / "Summary_Reports"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        c_name = self.input_custom_name.text().strip()
 
         self.btn_export.setEnabled(False)
         self.btn_export.setText(" Processing...")
@@ -252,7 +289,9 @@ class Tab4SummaryUI(QWidget):
                 "background-color: #FFF9E5; color: #FF9500; border-radius: 6px; font-weight: 800; font-size: 11px; padding: 4px 8px;"
             )
 
-        self.thread = t4_summary_logic.SummaryExportThread(self.json_files, save_path)
+        self.thread = t4_summary_logic.SummaryExportThread(
+            self.json_files, str(out_dir), c_name
+        )
         self.thread.progress_update.connect(self.on_export_progress)
         self.thread.finished.connect(self.on_export_finished)
         self.thread.start()
@@ -307,30 +346,48 @@ class Tab4SummaryUI(QWidget):
                 )
 
         if status == "success":
+            self.viz_card.setEnabled(True)
+            self.dz_excel.add_files([res["path"]])
+            self.handle_excel_drop([res["path"]])
+
             if errors:
                 self.log_msg.emit(
                     f"[WARNING] Exported with {len(errors)} error(s). Please check the logs."
                 )
             else:
-                self.log_msg.emit(f"[SUCCESS] Excel report exported to: {res['path']}")
+                target_folder = str(Path(res["path"]).parent)
+                self.log_msg.emit(
+                    f"[SUCCESS] Excel report exported to: {target_folder}"
+                )
                 try:
                     if sys.platform == "win32":
-                        os.startfile(res["path"])
+                        os.startfile(target_folder)
                     elif sys.platform == "darwin":
-                        subprocess.call(["open", res["path"]], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        subprocess.call(
+                            ["open", target_folder],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
                     else:
                         try:
-                            r = subprocess.call(["explorer.exe", res["path"]], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            r = subprocess.call(
+                                ["explorer.exe", target_folder],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                            )
                             if r != 0:
                                 raise OSError()
                         except Exception:
-                            r2 = subprocess.call(["xdg-open", res["path"]], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            r2 = subprocess.call(
+                                ["xdg-open", target_folder],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                            )
                             if r2 != 0:
                                 raise OSError()
                 except Exception:
                     self.log_msg.emit("[INFO] Excel report saved successfully.")
-                    self.log_msg.emit("[INFO] Unable to automatically open the file due to missing GUI display components in the current environment.")
-                    self.log_msg.emit(f"[INFO] Please manually open: {res['path']}")
+                    self.log_msg.emit(f"[INFO] Please manually open: {target_folder}")
         else:
             solution = get_solution(main_type)
             console_msg = f"Failed to export Excel | [{main_type}] {main_msg}\n{solution}\nTraceback:\n{main_tb}"
@@ -340,3 +397,33 @@ class Tab4SummaryUI(QWidget):
                 common_utils.log_error_to_file(
                     t1_st1_logic.CURRENT_PROJECT_PATH, "Tab 4: Summary", console_msg
                 )
+
+    def run_visualization(self):
+        if not self.excel_files:
+            self.log_msg.emit("[ERROR] No Excel files loaded for visualization.")
+            return
+
+        target_dir = Path(self.excel_files[0]).parent
+        c_name = self.input_custom_name.text().strip()
+
+        self.viz_thread = t4_summary_logic.VisualizationWorker(
+            self.excel_files, str(target_dir), c_name
+        )
+        self.viz_thread.progress_update.connect(
+            lambda p, m: self.log_msg.emit(f"[Viz] {m}")
+        )
+        self.viz_thread.finished_viz.connect(self.on_viz_finished)
+        self.viz_thread.error_viz.connect(lambda e: self.log_msg.emit(f"[ERROR] {e}"))
+        self.viz_thread.start()
+        self.btn_viz.setEnabled(False)
+
+    def on_viz_finished(self, out_dir):
+        self.log_msg.emit(f"[SUCCESS] SVGs and Source Data saved to: {out_dir}")
+        self.btn_viz.setEnabled(True)
+        try:
+            if sys.platform == "win32":
+                os.startfile(out_dir)
+            elif sys.platform == "darwin":
+                subprocess.call(["open", out_dir])
+        except Exception:
+            pass
