@@ -2,6 +2,7 @@ import os
 import re
 import zipfile
 import subprocess
+import random
 from pathlib import Path
 from ete3 import Tree
 
@@ -110,47 +111,47 @@ def get_matched_pairs(fasta_paths, nwk_paths):
     return matched_dict
 
 
-def prep_parallel_tasks(job_list, total_threads):
-    min_cores_per_job = 2
-    max_concurrent = max(1, total_threads // min_cores_per_job)
-
+def prep_parallel_tasks(job_list, total_threads, enable_triplicate=False):
     tasks = []
+    heavy_models = ["relax", "absrel", "busted"]
+
     for i, job in enumerate(job_list):
         f_name = Path(job["fasta"]).name
         t_name = Path(job["tree"]).name
         model = job["model"]
-        task_key = f"{f_name}==={t_name}==={model.upper()}==={i}"
+        runs = 3 if enable_triplicate else 1
 
-        tasks.append(
-            {
-                "job": job,
-                "model": model,
-                "key": task_key,
-                "f_name": f_name,
-                "t_name": t_name,
-            }
-        )
+        for run_idx in range(1, runs + 1):
+            suffix = f"_run{run_idx}" if enable_triplicate else ""
+            task_key = f"{f_name}==={t_name}==={model.upper()}==={i}{suffix}"
+            seed_val = random.randint(10000, 99999) if enable_triplicate else None
 
-    batches = [
-        tasks[i : i + max_concurrent] for i in range(0, len(tasks), max_concurrent)
-    ]
+            tasks.append(
+                {
+                    "job": job,
+                    "model": model,
+                    "key": task_key,
+                    "f_name": f_name,
+                    "t_name": t_name,
+                    "run_suffix": suffix,
+                    "seed": seed_val,
+                }
+            )
+
     allocations = {}
+    for task in tasks:
+        m_lower = task["model"].lower()
+        cores = 3 if m_lower in heavy_models else 1
+        allocations[task["key"]] = min(cores, max(1, total_threads))
 
-    for batch in batches:
-        n = len(batch)
-        base = total_threads // n
-        rem = total_threads % n
-        for i, task in enumerate(batch):
-            allocations[task["key"]] = max(1, base + (1 if i < rem else 0))
-
-    return batches, allocations
+    return [tasks], allocations
 
 
-def generate_bash_script(job_list, threads):
+def generate_bash_script(job_list, threads, enable_triplicate=False):
     if not job_list:
         return ""
 
-    batches, allocations = prep_parallel_tasks(job_list, threads)
+    batches, allocations = prep_parallel_tasks(job_list, threads, enable_triplicate)
 
     lines = [
         "#!/bin/bash",
@@ -161,31 +162,31 @@ def generate_bash_script(job_list, threads):
         '    CACHED_PATH=$(cat "$CACHE_FILE")',
         '    if [ -x "$CACHED_PATH" ]; then',
         '        HYPHY_PATH="$CACHED_PATH"',
-        '    fi',
-        'fi',
+        "    fi",
+        "fi",
         'if [ -z "$HYPHY_PATH" ]; then',
-        '    OS_TYPE=$(uname -s)',
-        '    if command -v conda &> /dev/null || command -v micromamba &> /dev/null; then',
-        '        [ -f ~/.bashrc ] && source ~/.bashrc 2>/dev/null',
-        '        [ -f ~/.zshrc ] && source ~/.zshrc 2>/dev/null',
-        '    fi',
-        '    if command -v hyphy &> /dev/null; then',
-        '        HYPHY_PATH=$(command -v hyphy)',
-        '    else',
+        "    OS_TYPE=$(uname -s)",
+        "    if command -v conda &> /dev/null || command -v micromamba &> /dev/null; then",
+        "        [ -f ~/.bashrc ] && source ~/.bashrc 2>/dev/null",
+        "        [ -f ~/.zshrc ] && source ~/.zshrc 2>/dev/null",
+        "    fi",
+        "    if command -v hyphy &> /dev/null; then",
+        "        HYPHY_PATH=$(command -v hyphy)",
+        "    else",
         '        HYPHY_PATH=$(find ~/.local/share/mamba ~/micromamba ~/miniconda3 ~/anaconda3 ~/.conda /usr/local/bin /usr/bin /opt/homebrew/bin -type f -name "hyphy" -executable 2>/dev/null | grep "/bin/hyphy" | head -n 1)',
-        '    fi',
+        "    fi",
         '    if [ -n "$HYPHY_PATH" ]; then',
         '        echo "$HYPHY_PATH" > "$CACHE_FILE"',
-        '    fi',
-        'fi',
+        "    fi",
+        "fi",
         'if [ -z "$HYPHY_PATH" ]; then',
         '    echo "[ERROR] HyPhy executable not found! Please ensure it is installed and accessible."',
-        '    exit 1',
-        'fi',
+        "    exit 1",
+        "fi",
         'HYPHY_LIB="$(dirname "$(dirname "$HYPHY_PATH")")/share/hyphy"',
         'export PATH="$(dirname "$HYPHY_PATH"):$PATH"',
         'HYPHY_EXEC="hyphy"',
-        'echo "Starting HyPhy Parallel pipeline..."\n',
+        'echo "Starting HyPhy Dynamic Queue Execution..."\n',
     ]
 
     model_name_map = {
@@ -194,14 +195,16 @@ def generate_bash_script(job_list, threads):
         "fel": "FEL",
         "meme": "MEME",
         "fubar": "FUBAR",
-        "relax": "RELAX"
+        "relax": "RELAX",
     }
+
+    avg_cores = sum(allocations.values()) / len(allocations) if allocations else 1
+    max_concurrent = max(1, int(threads // avg_cores))
+    lines.append(f"MAX_JOBS={max_concurrent}\n")
 
     for b_idx, batch in enumerate(batches):
         lines.append(f'echo "----------------------------------------"')
-        lines.append(
-            f'echo "Starting Batch {b_idx + 1}/{len(batches)} (Parallel Execution)..."'
-        )
+        lines.append(f'echo "Queuing {len(batch)} tasks into Dynamic Worker Pool..."')
 
         for task in batch:
             f_name = task["f_name"]
@@ -209,15 +212,20 @@ def generate_bash_script(job_list, threads):
             model = task["model"].lower()
             model_exact = model_name_map.get(model, model.upper())
             base_name = Path(t_name).stem
-            output_name = f"{base_name}_{model.upper()}.JSON"
-            error_log = f"{base_name}_{model.upper()}_log.txt"
+            output_name = f"{base_name}_{model.upper()}{task['run_suffix']}.JSON"
+            error_log = f"{base_name}_{model.upper()}{task['run_suffix']}_log.txt"
             task_cores = allocations[task["key"]]
-
             trace_key = task["key"]
+            seed_arg = f" --seed {task['seed']}" if task["seed"] else ""
+
+            lines.append("while [ $(jobs -p | wc -l) -ge $MAX_JOBS ]; do")
+            lines.append("    sleep 1")
+            lines.append("done")
+
             lines.append(f'echo "===REACTION_START==={trace_key}==="')
 
-            cmd_a = f'"$HYPHY_PATH" LIBPATH="$HYPHY_LIB" "$HYPHY_LIB/TemplateBatchFiles/SelectionAnalyses/{model_exact}.bf" --alignment "{f_name}" --tree "{t_name}" --CPU {task_cores} --output "{output_name}"'
-            cmd_b = f'"$HYPHY_EXEC" {model} --alignment "{f_name}" --tree "{t_name}" --CPU {task_cores} --output "{output_name}"'
+            cmd_a = f'ENV_TOLERATE_NUMERICAL_ERRORS=1 "$HYPHY_PATH" LIBPATH="$HYPHY_LIB" "$HYPHY_LIB/TemplateBatchFiles/SelectionAnalyses/{model_exact}.bf" --alignment "{f_name}" --tree "{t_name}" --CPU {task_cores}{seed_arg} --output "{output_name}"'
+            cmd_b = f'ENV_TOLERATE_NUMERICAL_ERRORS=1 "$HYPHY_EXEC" {model} --alignment "{f_name}" --tree "{t_name}" --CPU {task_cores}{seed_arg} --output "{output_name}"'
 
             if task["job"].get("has_fg"):
                 if model == "relax":
@@ -231,23 +239,23 @@ def generate_bash_script(job_list, threads):
                     cmd_b += " --srv Yes"
 
             bash_logic = (
-                f'( '
+                f"( "
                 f'{cmd_a} 2>&1 | tee "{error_log}"; '
-                f'STATUS=${{PIPESTATUS[0]}}; '
-                f'if [ $STATUS -ne 0 ]; then '
+                f"STATUS=${{PIPESTATUS[0]}}; "
+                f"if [ $STATUS -ne 0 ]; then "
                 f'echo "[WARNING] Plan A (Absolute Path) failed for {model.upper()}. Retrying with Plan B (Standard)..." | tee -a "{error_log}"; '
                 f'{cmd_b} 2>&1 | tee -a "{error_log}"; '
-                f'STATUS=${{PIPESTATUS[0]}}; '
-                f'fi; '
-                f'if [ $STATUS -eq 0 ]; then '
+                f"STATUS=${{PIPESTATUS[0]}}; "
+                f"fi; "
+                f"if [ $STATUS -eq 0 ]; then "
                 f'echo "===REACTION_DONE==={trace_key}==="; '
                 f'else echo "===REACTION_ERROR==={trace_key}==="; fi '
-                f') &'
+                f") &"
             )
             lines.append(bash_logic)
 
         lines.append("wait")
-        lines.append(f'echo "Batch {b_idx + 1} completed."\n')
+        lines.append(f'echo "All dynamic queue tasks completed."\n')
 
     lines.append('echo "All tasks completed successfully!"\n')
     return "\n".join(lines)
