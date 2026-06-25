@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hyphlow"
-version = "1.0.1"
+version = "1.0.4"
 description = "Bioinformatics selection analysis pipeline and GUI"
 readme = "README.md"
 authors = [
@@ -19,7 +19,9 @@ dependencies = [
     "ete3",
     "rapidfuzz",
     "taxopy",
-    "xlsxwriter"
+    "xlsxwriter",
+    "matplotlib",
+    "seaborn"
 ]
 
 [project.scripts]
