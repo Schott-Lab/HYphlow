@@ -6,3 +6,5 @@ taxopy
 xlsxwriter
 PyQt5
 qtawesome
+matplotlib
+seaborn
