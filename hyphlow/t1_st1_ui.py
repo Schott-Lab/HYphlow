@@ -512,7 +512,7 @@ class StandardizationPage(QWidget):
 
         nwk_vbox = QVBoxLayout()
         self.nwk_drop = UnifiedDropZone(
-            [".nwk", ".tree", ".tre"],
+            [".nwk", ".tree", ".tre", ".newick"],
             "Supported formats: NWK",
             file_type="nwk",
             open_in_base_dir=True,
