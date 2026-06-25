@@ -26,6 +26,7 @@ from PyQt5.QtWidgets import (
     QTableWidgetItem,
     QComboBox,
     QSizePolicy,
+    QCheckBox,
 )
 from PyQt5.QtCore import (
     Qt,
@@ -249,8 +250,14 @@ class Tab3HyPhyUI(QWidget):
                 else ""
             )
             import platform
+
             if platform.system() == "Linux":
-                dialog = QFileDialog(self_dz, "Select FASTA Files", default_dir, "FASTA Files (*.fas *.fasta *.fa)")
+                dialog = QFileDialog(
+                    self_dz,
+                    "Select FASTA Files",
+                    default_dir,
+                    "FASTA Files (*.fas *.fasta *.fa)",
+                )
                 dialog.setFileMode(QFileDialog.ExistingFiles)
                 dialog.setStyleSheet("""
                     QWidget { background-color: #FFFFFF; color: #1D1D1F; }
@@ -267,7 +274,10 @@ class Tab3HyPhyUI(QWidget):
                         self_dz.add_files(files)
             else:
                 files, _ = QFileDialog.getOpenFileNames(
-                    self_dz, "Select FASTA Files", default_dir, "FASTA Files (*.fas *.fasta *.fa)"
+                    self_dz,
+                    "Select FASTA Files",
+                    default_dir,
+                    "FASTA Files (*.fas *.fasta *.fa)",
                 )
                 if files:
                     self_dz.add_files(files)
@@ -283,8 +293,14 @@ class Tab3HyPhyUI(QWidget):
                 else ""
             )
             import platform
+
             if platform.system() == "Linux":
-                dialog = QFileDialog(self_dz, "Select NWK Files", default_dir, "NWK Files (*.nwk *.tre *.tree)")
+                dialog = QFileDialog(
+                    self_dz,
+                    "Select NWK Files",
+                    default_dir,
+                    "NWK Files (*.nwk *.tre *.tree)",
+                )
                 dialog.setFileMode(QFileDialog.ExistingFiles)
                 dialog.setStyleSheet("""
                     QWidget { background-color: #FFFFFF; color: #1D1D1F; }
@@ -301,7 +317,10 @@ class Tab3HyPhyUI(QWidget):
                         self_dz.add_files(files)
             else:
                 files, _ = QFileDialog.getOpenFileNames(
-                    self_dz, "Select NWK Files", default_dir, "NWK Files (*.nwk *.tre *.tree)"
+                    self_dz,
+                    "Select NWK Files",
+                    default_dir,
+                    "NWK Files (*.nwk *.tre *.tree)",
                 )
                 if files:
                     self_dz.add_files(files)
@@ -380,6 +399,14 @@ class Tab3HyPhyUI(QWidget):
         config_title.setObjectName("SubHeader")
         config_title.setStyleSheet("border: none; background: transparent;")
         cl_layout.addWidget(config_title)
+
+        self.chk_triplicate = QCheckBox("Enable Triplicate Runs (Avoid Local Optima)")
+        self.chk_triplicate.setStyleSheet(
+            "color: #1D1D1F; font-weight: 600; font-size: 11px; padding: 4px 0px;"
+        )
+        self.chk_triplicate.stateChanged.connect(self.update_script_preview)
+        cl_layout.addWidget(self.chk_triplicate)
+
         self.queue_container = FlowContainer()
         self.queue_container.setStyleSheet("background: transparent; border: none;")
         self.queue_layout = FlowLayout(self.queue_container, margin=0, spacing=8)
@@ -814,7 +841,9 @@ class Tab3HyPhyUI(QWidget):
     def update_script_preview(self):
         self.is_generating_script = True
         threads = int(self.combo_cpu.currentText())
-        script_content = t3_hyphy_logic.generate_bash_script(self.job_queue, threads)
+        script_content = t3_hyphy_logic.generate_bash_script(
+            self.job_queue, threads, self.chk_triplicate.isChecked()
+        )
         self.script_editor.setText(script_content)
         self.is_generating_script = False
         self.check_syntax()
@@ -903,7 +932,7 @@ class Tab3HyPhyUI(QWidget):
 
         threads = int(self.combo_cpu.currentText())
         batches, allocations = t3_hyphy_logic.prep_parallel_tasks(
-            self.job_queue, threads
+            self.job_queue, threads, self.chk_triplicate.isChecked()
         )
 
         row = 0
@@ -913,9 +942,14 @@ class Tab3HyPhyUI(QWidget):
                 disp_f, disp_t = self.format_display_names(
                     task["f_name"], task["t_name"]
                 )
+
+                disp_model = task["model"]
+                if task["run_suffix"]:
+                    disp_model += f" (Run {task['run_suffix'].replace('_run', '')})"
+
                 self.progress_table.setItem(row, 0, QTableWidgetItem(disp_f))
                 self.progress_table.setItem(row, 1, QTableWidgetItem(disp_t))
-                self.progress_table.setItem(row, 2, QTableWidgetItem(task["model"]))
+                self.progress_table.setItem(row, 2, QTableWidgetItem(disp_model))
                 self.progress_table.setItem(
                     row, 3, QTableWidgetItem(str(allocations[task["key"]]))
                 )
@@ -954,7 +988,7 @@ class Tab3HyPhyUI(QWidget):
                 os.chmod(script_path, 0o755)
                 cmd = ["bash", str(script_path)]
 
-            self.total_jobs = len(self.job_queue)
+            self.total_jobs = sum(len(b) for b in batches)
             self.completed_jobs = 0
             self.progress_update.emit("Batch Execution", 0, "Initializing...")
 
@@ -969,7 +1003,7 @@ class Tab3HyPhyUI(QWidget):
             self.wsl_clear.emit()
             self.wsl_msg.emit("[SYSTEM] Initializing HyPhy Execution...")
             self.log_msg.emit(
-                f"[PROCESS] HyPhy Parallel Execution Started ({self.total_jobs} jobs pending)..."
+                f"[PROCESS] HyPhy Parallel Execution Started ({self.total_jobs} tasks pending)..."
             )
 
             self.btn_run_hyphy.setEnabled(False)
@@ -1022,7 +1056,7 @@ class Tab3HyPhyUI(QWidget):
 
             if ls.startswith("===REACTION_START==="):
                 parts = ls.split("===")
-                if len(parts) >= 5:
+                if len(parts) >= 6:
                     key = f"{parts[2]}==={parts[3]}==={parts[4]}==={parts[5]}"
                     if key in self.task_map:
                         row = self.task_map[key]
@@ -1036,7 +1070,7 @@ class Tab3HyPhyUI(QWidget):
 
             elif ls.startswith("===REACTION_DONE==="):
                 parts = ls.split("===")
-                if len(parts) >= 5:
+                if len(parts) >= 6:
                     key = f"{parts[2]}==={parts[3]}==={parts[4]}==={parts[5]}"
                     if key in self.task_map:
                         row = self.task_map[key]
@@ -1052,7 +1086,7 @@ class Tab3HyPhyUI(QWidget):
 
             elif ls.startswith("===REACTION_ERROR==="):
                 parts = ls.split("===")
-                if len(parts) >= 5:
+                if len(parts) >= 6:
                     key = f"{parts[2]}==={parts[3]}==={parts[4]}==={parts[5]}"
                     if key in self.task_map:
                         row = self.task_map[key]
@@ -1080,7 +1114,7 @@ class Tab3HyPhyUI(QWidget):
                                 except Exception:
                                     pass
 
-                        msg = f"[ERROR] Job execution failed for {parts[2]} (Model: {parts[4]})."
+                        msg = f"[ERROR] Task execution failed for {parts[2]} (Model: {parts[4]})."
                         if extracted_error:
                             msg += extracted_error
                         else:
@@ -1124,20 +1158,38 @@ class Tab3HyPhyUI(QWidget):
                     if sys.platform == "win32":
                         os.startfile(self.current_work_dir)
                     elif sys.platform == "darwin":
-                        subprocess.call(["open", self.current_work_dir], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        subprocess.call(
+                            ["open", self.current_work_dir],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
                     else:
                         try:
-                            res = subprocess.call(["explorer.exe", self.current_work_dir], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            res = subprocess.call(
+                                ["explorer.exe", self.current_work_dir],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                            )
                             if res != 0:
                                 raise OSError()
                         except Exception:
-                            res2 = subprocess.call(["xdg-open", self.current_work_dir], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            res2 = subprocess.call(
+                                ["xdg-open", self.current_work_dir],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                            )
                             if res2 != 0:
                                 raise OSError()
                 except Exception:
-                    self.log_msg.emit("[INFO] Analysis completed successfully and all results are safely saved.")
-                    self.log_msg.emit("[INFO] Unable to automatically visualize the output folder due to missing GUI display components in the current environment.")
-                    self.log_msg.emit(f"[INFO] Please manually navigate to: {self.current_work_dir}")
+                    self.log_msg.emit(
+                        "[INFO] Analysis completed successfully and all results are safely saved."
+                    )
+                    self.log_msg.emit(
+                        "[INFO] Unable to automatically visualize the output folder due to missing GUI display components in the current environment."
+                    )
+                    self.log_msg.emit(
+                        f"[INFO] Please manually navigate to: {self.current_work_dir}"
+                    )
 
             if t1_st1_logic.CURRENT_PROJECT_PATH:
                 try:
@@ -1230,5 +1282,5 @@ class Tab3HyPhyUI(QWidget):
             script = self.script_editor.toPlainText()
             t3_hyphy_logic.export_job_to_zip(self.job_queue, script, save_path)
             self.log_msg.emit(
-                f"[SUCCESS] Export Package ZIP created successfully at: {save_path}"
+                f"[SUCCESS] Export Package ZIP created 지 successfully at: {save_path}"
             )
