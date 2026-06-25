@@ -5,9 +5,7 @@ from datetime import datetime
 
 
 def get_pipeline_path(project_path, category="Results", file_type="CSV"):
-    """
-    유저 워크스페이스 내에 구조화된 하위 폴더를 자동 생성합니다.
-    """
+
     if not project_path:
         return None
 
@@ -32,9 +30,7 @@ def get_pipeline_path(project_path, category="Results", file_type="CSV"):
 
 
 def detect_gene_from_file(file_path):
-    """
-    파일 내부의 헤더/노드 텍스트를 읽고 NCBI 코드를 제외한 진짜 유전자 이름을 추출합니다.
-    """
+
     candidates = []
     ignore_words = {
         "FMT",
@@ -92,10 +88,7 @@ def detect_gene_from_file(file_path):
 
 
 def generate_smart_filename(base_name, file_type, out_dir, ext, is_report=False):
-    """
-    날짜(MMDD)와 버전(v#)이 포함된 스마트 파일명 생성
-    - REC 요청 시 _rec 계열 꼬리표 부착 규칙 적용
-    """
+
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
     mmdd = datetime.now().strftime("%m%d")
@@ -132,9 +125,7 @@ def generate_smart_filename(base_name, file_type, out_dir, ext, is_report=False)
 
 
 def log_error_to_file(project_path, tab_name, error_msg):
-    """
-    에러 발생 시 Reports/Error_Reports 폴더에 MMDD 형식으로 로그를 누적 저장합니다.
-    """
+
     if not project_path:
         return None
 
