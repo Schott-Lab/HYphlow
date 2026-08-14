@@ -1,5 +1,6 @@
 import os
 import re
+import sys
 from pathlib import Path
 from datetime import datetime
 from PyQt5.QtWidgets import (
@@ -12,161 +13,416 @@ from PyQt5.QtWidgets import (
     QFileDialog,
     QProgressBar,
     QScrollArea,
-    QDialog,
     QComboBox,
     QTableWidget,
     QHeaderView,
-    QGraphicsDropShadowEffect,
     QTextBrowser,
     QLineEdit,
     QSplitter,
+    QLayout,
+    QMessageBox,
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QPropertyAnimation, QPoint, QTime
-from PyQt5.QtGui import QColor, QPixmap, QPainter, QPen, QIcon, QTextCursor, QFont
+from PyQt5.QtCore import (
+    Qt,
+    pyqtSignal,
+    QTimer,
+    QPropertyAnimation,
+    QPoint,
+    QRect,
+    QSize,
+    QTime,
+    QUrl,
+)
+from PyQt5.QtGui import (
+    QColor,
+    QPainter,
+    QPen,
+    QTextCursor,
+    QFont,
+    QPalette,
+    QDesktopServices,
+)
 import qtawesome as qta
 from hyphlow import common_utils
+from hyphlow import organism_names
+from hyphlow import manifest_logic_tab
+from hyphlow import t1_st1_logic
 
-class Popup(QDialog):
-    def __init__(
-        self, title, message, popup_type="success", parent=None, custom_btn_text=None
-    ):
+DOT_GREEN = "#34C759"
+DOT_ORANGE = "#FF9500"
+
+# --- design tokens: the only place these values are defined ---
+INK, INK_MUTED, INK_FAINT = "#1D1D1F", "#515154", "#8E8E93"
+BLUE, GREEN, RED, ORANGE = "#0071E3", "#34C759", "#FF3B30", "#FF9500"
+LINE, SURFACE, SURFACE_ALT = "#E5E5EA", "#FFFFFF", "#F2F2F7"
+
+FONT_FAMILY = "-apple-system, 'Segoe UI', Roboto, sans-serif"
+# Same stack for QFont.setFamilies, which Qt resolves against installed fonts.
+# Consolas is Windows-only, Menlo macOS-only, DejaVu Sans Mono ships on Linux.
+FONT_STACK = ["Segoe UI", "Roboto", "DejaVu Sans", "sans-serif"]
+MONO_FAMILY = "Consolas, Menlo, 'DejaVu Sans Mono', 'Courier New', monospace"
+MONO_STACK = ["Consolas", "Menlo", "DejaVu Sans Mono", "Courier New", "monospace"]
+
+
+FS_TITLE, FS_BODY, FS_SMALL, FS_TINY = 16, 14, 13, 11
+RADIUS, RADIUS_CARD = 8, 16
+BTN_HEIGHT = 44
+
+
+def mono_font(size=10):
+    f = QFont()
+    f.setFamilies(MONO_STACK)
+    f.setPointSize(size)
+    f.setStyleHint(QFont.Monospace)
+    return f
+
+
+# state -> (background, foreground, hover). Used by PrimaryButton.set_state.
+BUTTON_STATES = {
+    "run": (INK, "#FFFFFF", "#333333"),
+    "accent": (BLUE, "#FFFFFF", "#005BB5"),
+    "stop": (RED, "#FFFFFF", "#D70015"),
+    "busy": (ORANGE, "#FFFFFF", "#E08600"),
+    "error": ("#FFECEB", RED, "#FFD1CE"),
+}
+
+
+def open_path(path):
+    """Open a file or folder in the OS file manager. Qt handles every platform."""
+    QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+
+# Every role Qt reads. Any role left unset falls through to the desktop theme,
+# which is how dialogs went dark on dark-mode machines.
+_LIGHT_ROLES = {
+    "Window": SURFACE,
+    "WindowText": INK,
+    "Base": SURFACE,
+    "AlternateBase": SURFACE_ALT,
+    "ToolTipBase": SURFACE,
+    "ToolTipText": INK,
+    "Text": INK,
+    "Button": SURFACE_ALT,
+    "ButtonText": INK,
+    "BrightText": "#FFFFFF",
+    "Highlight": BLUE,
+    "HighlightedText": "#FFFFFF",
+    "PlaceholderText": INK_FAINT,
+    "Link": BLUE,
+    "LinkVisited": "#5856D6",
+    "Light": "#FFFFFF",
+    "Midlight": "#FAFAFA",
+    "Mid": LINE,
+    "Dark": "#D1D1D6",
+    "Shadow": "#C7C7CC",
+}
+_DISABLED_ROLES = {
+    "WindowText": INK_FAINT,
+    "Text": INK_FAINT,
+    "ButtonText": INK_FAINT,
+    "Base": SURFACE_ALT,
+    "Button": SURFACE_ALT,
+    "Window": SURFACE,
+    "Highlight": LINE,
+    "HighlightedText": INK_FAINT,
+}
+
+GLOBAL_STYLESHEET = f"""
+QMainWindow, QDialog, QFileDialog, QMessageBox, QInputDialog {{
+    background-color: {SURFACE};
+    color: {INK};
+}}
+/* Qt does not inherit color into child widgets, so name them explicitly. */
+QMessageBox QLabel, QInputDialog QLabel {{ color: {INK}; background: transparent; }}
+QMessageBox QPushButton, QInputDialog QPushButton {{
+    background-color: {SURFACE_ALT}; color: {INK};
+    border: 1px solid #D1D1D6; border-radius: 6px; padding: 6px 16px; min-width: 72px;
+}}
+QMessageBox QPushButton:hover, QInputDialog QPushButton:hover {{ background-color: #E5E5EA; }}
+QMessageBox QPushButton:default, QInputDialog QPushButton:default {{
+    background-color: {INK}; color: #FFFFFF; border: none;
+}}
+QToolTip {{ background-color: {SURFACE}; color: {INK}; border: 1px solid {LINE}; padding: 4px; }}
+QMenu {{ background-color: {SURFACE}; color: {INK}; border: 1px solid {LINE}; }}
+QMenu::item:selected {{ background-color: {SURFACE_ALT}; color: {INK}; }}
+QComboBox QAbstractItemView {{
+    background-color: {SURFACE}; color: {INK};
+    selection-background-color: {SURFACE_ALT}; selection-color: {INK};
+}}
+QFileDialog, QFileDialog * {{ background-color: {SURFACE}; color: {INK}; }}
+QFileDialog QTreeView, QFileDialog QListView, QFileDialog QTableView {{
+    background-color: {SURFACE}; color: {INK};
+    selection-background-color: {BLUE}; selection-color: #FFFFFF;
+}}
+QFileDialog QHeaderView::section {{
+    background-color: {SURFACE_ALT}; color: {INK}; border: none;
+    border-right: 1px solid #D1D1D6; border-bottom: 1px solid #D1D1D6; padding: 4px;
+}}
+QFileDialog QComboBox, QFileDialog QLineEdit {{
+    background-color: #F5F5F7; color: {INK};
+    border: 1px solid #D1D1D6; border-radius: 4px; padding: 3px 6px;
+}}
+/* without padding Qt sizes these to the raw text width and the label touches the border */
+QFileDialog QPushButton {{
+    background-color: #F5F5F7; color: {INK};
+    border: 1px solid #D1D1D6; border-radius: 4px;
+    padding: 5px 14px; min-width: 64px;
+}}
+QFileDialog QPushButton:hover {{ background-color: #E5E5EA; }}
+QLabel#MainTitle {{ font-size: 24px; font-weight: 800; color: {INK}; background: transparent; border: none; }}
+QLabel#SectionHeader {{ font-size: 20px; font-weight: 700; color: {INK}; background: transparent; border: none; }}
+QLabel#SubHeader {{ font-size: 18px; font-weight: 500; color: {INK}; background: transparent; border: none; }}
+QLabel#SubText {{ font-size: {FS_BODY}px; font-weight: 400; color: {INK_FAINT}; background: transparent; border: none; }}
+QScrollBar:vertical {{ border: none; background: transparent; width: 8px; margin: 0px; }}
+QScrollBar::handle:vertical {{ background-color: #D1D1D6; border-radius: 4px; min-height: 20px; }}
+QScrollBar::handle:vertical:hover {{ background-color: {INK_FAINT}; }}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ border: none; background: none; height: 0px; }}
+QScrollBar:horizontal {{ border: none; background: transparent; height: 8px; margin: 0px; }}
+QScrollBar::handle:horizontal {{ background-color: #D1D1D6; border-radius: 4px; min-width: 20px; }}
+QScrollBar::handle:horizontal:hover {{ background-color: {INK_FAINT}; }}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal,
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{ border: none; background: none; width: 0px; }}
+"""
+
+
+# Native Win/macOS file dialogs follow the OS theme and ignore our palette, so
+# every picker asks for Qt's own dialog.
+#
+# The dialog is parented into the app, so Qt merges the ANCESTOR widget
+# stylesheets into it - and several app widgets say "background: transparent",
+# which paints the file list black. Ancestor sheets also outrank the application
+# sheet, so GLOBAL_STYLESHEET cannot fix it. A stylesheet on the dialog itself
+# outranks every ancestor, so that is where the colours have to go.
+FILE_DIALOG_STYLESHEET = f"""
+QWidget {{ background-color: {SURFACE}; color: {INK}; }}
+QAbstractItemView {{
+    background-color: {SURFACE}; color: {INK};
+    alternate-background-color: {SURFACE_ALT}; outline: none;
+}}
+QAbstractItemView::item:selected {{ background-color: {BLUE}; color: #FFFFFF; }}
+QHeaderView::section {{
+    background-color: {SURFACE_ALT}; color: {INK}; border: none;
+    border-right: 1px solid #D1D1D6; border-bottom: 1px solid #D1D1D6; padding: 4px;
+}}
+QPushButton {{
+    background-color: #F5F5F7; color: {INK}; border: 1px solid #D1D1D6;
+    border-radius: 4px; padding: 5px 14px; min-width: 64px;
+}}
+QPushButton:hover {{ background-color: {LINE}; }}
+QLineEdit, QComboBox {{
+    background-color: #F5F5F7; color: {INK};
+    border: 1px solid #D1D1D6; border-radius: 4px; padding: 3px 6px;
+}}
+QComboBox QAbstractItemView {{ background-color: {SURFACE}; color: {INK}; }}
+QToolButton {{ background: transparent; border: none; padding: 2px; }}
+QToolButton:hover {{ background-color: {SURFACE_ALT}; border-radius: 4px; }}
+"""
+# Same reason as FILE_DIALOG_STYLESHEET: ancestor stylesheets outrank the
+# application sheet, so the QMessageBox rules in GLOBAL_STYLESHEET never
+# reach a box that is parented into the app.
+MESSAGE_BOX_STYLESHEET = f"""
+QMessageBox {{ background-color: {SURFACE}; }}
+QMessageBox QLabel {{ background: transparent; color: {INK}; }}
+QMessageBox QPushButton {{
+    background-color: #F5F5F7; color: {INK}; border: 1px solid #D1D1D6;
+    border-radius: 6px; padding: 6px 18px; min-width: 72px;
+}}
+QMessageBox QPushButton:hover {{ background-color: {LINE}; }}
+QMessageBox QPushButton:default {{
+    background-color: {INK}; color: #FFFFFF; border: none; font-weight: bold;
+}}
+"""
+
+
+def message_box(parent, icon, title, text):
+    """QMessageBox with the colours set on the dialog itself."""
+    box = QMessageBox(parent)
+    box.setIcon(icon)
+    box.setWindowTitle(title)
+    box.setText(text)
+    box.setStyleSheet(MESSAGE_BOX_STYLESHEET)
+    return box
+
+
+def _file_dialog(parent, caption, directory, filter_str=""):
+    d = QFileDialog(parent, caption, str(directory or ""), filter_str)
+    d.setOption(QFileDialog.DontUseNativeDialog, True)
+    d.setStyleSheet(FILE_DIALOG_STYLESHEET)
+    return d
+
+
+def pick_files(parent, caption, directory, filter_str):
+    d = _file_dialog(parent, caption, directory, filter_str)
+    d.setFileMode(QFileDialog.ExistingFiles)
+    return d.selectedFiles() if d.exec_() else []
+
+
+def pick_save(parent, caption, directory, filter_str):
+    d = _file_dialog(parent, caption, directory, filter_str)
+    d.setAcceptMode(QFileDialog.AcceptSave)
+    picked = d.selectedFiles() if d.exec_() else []
+    return picked[0] if picked else ""
+
+
+def pick_dir(parent, caption, directory=""):
+    d = _file_dialog(parent, caption, directory)
+    d.setFileMode(QFileDialog.Directory)
+    d.setOption(QFileDialog.ShowDirsOnly, True)
+    picked = d.selectedFiles() if d.exec_() else []
+    return picked[0] if picked else ""
+
+
+def force_light_env():
+    """Neutralise OS theme hooks. MUST run before QApplication is constructed.
+
+    Qt reads these at startup, so setting them later has no effect:
+      QT_STYLE_OVERRIDE     e.g. Adwaita-Dark, applied before our setStyle runs
+      QT_QPA_PLATFORMTHEME  gtk3/kde plugins hand Qt the desktop's dark palette
+      windows:darkmode      Qt >=5.15 paints dark title bars and frames
+    """
+    os.environ.pop("QT_STYLE_OVERRIDE", None)
+    os.environ.pop("QT_QPA_PLATFORMTHEME", None)
+    if sys.platform == "win32" and "QT_QPA_PLATFORM" not in os.environ:
+        os.environ["QT_QPA_PLATFORM"] = "windows:darkmode=0"
+
+
+def apply_light_theme(app):
+    """Force light mode regardless of the OS theme.
+
+    Fusion is used because the native Windows/macOS styles paint from the system
+    theme and ignore a custom palette.
+    """
+    app.setStyle("Fusion")
+
+    base_font = QFont()
+    base_font.setFamilies(FONT_STACK)
+    base_font.setPixelSize(FS_BODY)
+    app.setFont(base_font)
+
+    pal = QPalette()
+    for role, color in _LIGHT_ROLES.items():
+        pal.setColor(getattr(QPalette, role), QColor(color))
+    for role, color in _DISABLED_ROLES.items():
+        pal.setColor(QPalette.Disabled, getattr(QPalette, role), QColor(color))
+    app.setPalette(pal)
+    app.setStyleSheet(GLOBAL_STYLESHEET)
+    return app
+
+
+class FlowLayout(QLayout):
+    def __init__(self, parent=None, margin=0, spacing=-1):
         super().__init__(parent)
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
-        self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setFixedSize(360, 240)
-        style_map = {
-            "success": ("#34C759", "#EBF9EE", "mdi.check", "Okay"),
-            "error": ("#FF3B30", "#FFECEB", "mdi.close", "Retry"),
-            "warning": ("#FFCC00", "#FFF9E5", "mdi.exclamation", "Cancel"),
-            "info": ("#0071E3", "#E5F0FF", "mdi.information-variant", "Okay"),
-        }
-        color, bg_light, icon_name, default_btn = style_map.get(
-            popup_type, style_map["success"]
-        )
+        self.setContentsMargins(margin, margin, margin, margin)
+        self.setSpacing(spacing)
+        self.itemList = []
 
-        btn_text = custom_btn_text if custom_btn_text else default_btn
+    def __del__(self):
+        item = self.takeAt(0)
+        while item:
+            item = self.takeAt(0)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        self.main_bg = QFrame()
-        self.main_bg.setStyleSheet(
-            "QFrame { background-color: #FFFFFF; border-radius: 16px; border: 1px solid #E5E5EA; }"
-        )
-        bg_layout = QVBoxLayout(self.main_bg)
-        bg_layout.setContentsMargins(20, 15, 20, 25)
-        top_bar = QHBoxLayout()
-        top_bar.addStretch()
-        self.close_btn = QPushButton()
-        self.close_btn.setIcon(qta.icon("mdi.close", color="#8E8E93"))
-        self.close_btn.setFixedSize(24, 24)
-        self.close_btn.setCursor(Qt.PointingHandCursor)
-        self.close_btn.setStyleSheet(
-            "QPushButton { border: none; background: transparent; border-radius: 12px; } QPushButton:hover { background-color: #F2F2F7; }"
-        )
-        self.close_btn.clicked.connect(self.reject)
-        top_bar.addWidget(self.close_btn)
-        bg_layout.addLayout(top_bar)
-        icon_layout = QHBoxLayout()
-        self.icon_lbl = QLabel()
-        self.icon_lbl.setFixedSize(48, 48)
-        self.icon_lbl.setStyleSheet(
-            f"background-color: {bg_light}; border-radius: 24px; border: none;"
-        )
-        self.icon_lbl.setAlignment(Qt.AlignCenter)
-        self.icon_lbl.setPixmap(qta.icon(icon_name, color=color).pixmap(28, 28))
-        icon_layout.addStretch()
-        icon_layout.addWidget(self.icon_lbl)
-        icon_layout.addStretch()
-        bg_layout.addLayout(icon_layout)
-        bg_layout.addSpacing(5)
-        title_lbl = QLabel(title)
-        title_lbl.setStyleSheet(
-            'font-family: -apple-system, "Segoe UI"; font-size: 18px; font-weight: 800; color: #1D1D1F; border: none; background: transparent;'
-        )
-        title_lbl.setAlignment(Qt.AlignCenter)
-        bg_layout.addWidget(title_lbl)
-        msg_lbl = QLabel(message)
-        msg_lbl.setStyleSheet(
-            'font-family: -apple-system, "Segoe UI"; font-size: 13px; color: #515154; border: none; background: transparent;'
-        )
-        msg_lbl.setAlignment(Qt.AlignCenter)
-        msg_lbl.setWordWrap(True)
-        bg_layout.addWidget(msg_lbl)
-        bg_layout.addSpacing(10)
-        self.action_btn = QPushButton(btn_text)
-        self.action_btn.setFixedHeight(40)
-        self.action_btn.setCursor(Qt.PointingHandCursor)
-        self.action_btn.setStyleSheet("""
-            QPushButton { background-color: #1D1D1F; color: white; font-size: 14px; font-weight: bold; border-radius: 8px; border: none; }
-            QPushButton:hover { background-color: #333333; }
-        """)
-        self.action_btn.clicked.connect(self.accept)
-        bg_layout.addWidget(self.action_btn)
-        layout.addWidget(self.main_bg)
+    def addItem(self, item):
+        self.itemList.append(item)
 
-    def exec(self):
-        overlay = None
-        main_win = self.parentWidget().window() if self.parentWidget() else None
-        if main_win:
-            overlay = QWidget(main_win)
-            overlay.setStyleSheet("background-color: rgba(0, 0, 0, 120);")
-            overlay.setGeometry(main_win.rect())
-            overlay.show()
-        res = super().exec()
-        if overlay:
-            overlay.deleteLater()
-        return res
+    def count(self):
+        return len(self.itemList)
+
+    def itemAt(self, index):
+        return self.itemList[index] if 0 <= index < len(self.itemList) else None
+
+    def takeAt(self, index):
+        return self.itemList.pop(index) if 0 <= index < len(self.itemList) else None
+
+    def expandingDirections(self):
+        return Qt.Orientations(0)
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self.doLayout(QRect(0, 0, width, 0), True)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self.doLayout(rect, False)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        size = QSize()
+        for item in self.itemList:
+            if item is not None and item.widget() is not None:
+                size = size.expandedTo(item.minimumSize())
+        margins = self.contentsMargins()
+        size += QSize(
+            margins.left() + margins.right(), margins.top() + margins.bottom()
+        )
+        return size
+
+    def doLayout(self, rect, testOnly):
+        x, y, lineHeight = rect.x(), rect.y(), 0
+        spacing = self.spacing()
+        for item in self.itemList:
+            if item is None or item.widget() is None:
+                continue
+            nextX = x + item.sizeHint().width() + spacing
+            if nextX - spacing > rect.right() and lineHeight > 0:
+                x, y = rect.x(), y + lineHeight + spacing
+                nextX, lineHeight = x + item.sizeHint().width() + spacing, 0
+            if not testOnly:
+                item.setGeometry(QRect(QPoint(x, y), item.sizeHint()))
+            x = nextX
+            lineHeight = max(lineHeight, item.sizeHint().height())
+        return y + lineHeight - rect.y()
+
+
+class FlowContainer(QWidget):
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self.layout():
+            h = self.layout().heightForWidth(self.width())
+            if self.minimumHeight() != h:
+                self.setMinimumHeight(h)
 
 
 class PrimaryButton(QPushButton):
+    """The one primary action button. Tabs change state via set_state, never CSS."""
+
     def __init__(self, text, icon_name=None):
         super().__init__(text)
-        self.setFixedHeight(44)
+        self.setFixedHeight(BTN_HEIGHT)
         self.setCursor(Qt.PointingHandCursor)
-        if icon_name:
-            self.setIcon(qta.icon(icon_name, color="white"))
-        self.setStyleSheet("""
-            QPushButton { background-color: #1D1D1F; color: white; font-size: 14px; font-weight: bold; border-radius: 8px; border: none; padding: 0 16px; }
-            QPushButton:hover { background-color: #000000; }
-            QPushButton:disabled { background-color: #E5E5EA; color: #8E8E93; }
+        self._icon_name = icon_name
+        self.set_state("run")
+
+    def set_state(self, state="run", text=None, icon_name=None):
+        bg, fg, hover = BUTTON_STATES[state]
+        border = f"1px solid {fg}" if state == "error" else "none"
+        # An error button is usually disabled too - it must stay red, not grey out.
+        off_bg, off_fg = (bg, fg) if state == "error" else (LINE, INK_FAINT)
+        self.setStyleSheet(f"""
+            QPushButton {{ background-color: {bg}; color: {fg}; font-family: {FONT_FAMILY};
+                font-size: {FS_BODY}px; font-weight: bold; border-radius: {RADIUS}px;
+                border: {border}; padding: 0 16px; }}
+            QPushButton:hover {{ background-color: {hover}; }}
+            QPushButton:disabled {{ background-color: {off_bg}; color: {off_fg}; border: {border}; }}
         """)
+        if text is not None:
+            self.setText(text)
+        if icon_name is not None:
+            self._icon_name = icon_name
+        if self._icon_name:
+            self.setIcon(qta.icon(self._icon_name, color=fg))
 
 
-class ActionButton(QPushButton):
+class ActionButton(PrimaryButton):
+    """Secondary action. Same geometry and type scale as PrimaryButton, blue fill."""
+
     def __init__(self, text, icon_name, is_danger=False):
-        super().__init__(text)
-        self.setFixedHeight(40)
-        self.setCursor(Qt.PointingHandCursor)
-        self.setIcon(qta.icon(icon_name, color="white"))
-        bg_color = "#FF3B30" if is_danger else "#0071E3"
-        hover_color = "#D70015" if is_danger else "#005BB5"
-        self.setStyleSheet(f"""
-            QPushButton {{ background-color: {bg_color}; color: white; font-size: 14px; font-weight: bold; border-radius: 8px; border: none; padding: 0 16px; }}
-            QPushButton:hover {{ background-color: {hover_color}; }}
-        """)
-
-
-class GhostButton(QPushButton):
-    def __init__(self, text, icon_name, color="#515154", hover_color="#1D1D1F"):
-        super().__init__(text)
-        self.setCursor(Qt.PointingHandCursor)
-        self.setIcon(qta.icon(icon_name, color=color))
-        self.setStyleSheet(f"""
-            QPushButton {{ font-size: 14px; font-weight: bold; color: {color}; background: transparent; border: none; }}
-            QPushButton:hover {{ color: {hover_color}; }}
-        """)
-
-
-class StandardComboBox(QComboBox):
-    def __init__(self):
-        super().__init__()
-        self.setFixedHeight(36)
-        self.setMinimumWidth(220)
-        self.setStyleSheet("""
-            QComboBox { border: 1px solid #E5E5EA; border-radius: 8px; padding: 5px 12px; background: #ffffff; color: #1D1D1F; font-size: 14px; }
-            QComboBox::drop-down { border: none; width: 30px; }
-            QComboBox::down-arrow { image: url("data:image/svg+xml;base64,..."); }
-        """)
+        super().__init__(text, icon_name)
+        self.set_state("stop" if is_danger else "accent")
 
 
 class StandardTable(QTableWidget):
@@ -232,67 +488,6 @@ class TableCheckBoxWidget(QWidget):
         return self.checkbox.is_checked
 
 
-class CollapsibleCard(QFrame):
-    def __init__(self, title, description="", start_collapsed=True):
-        super().__init__()
-        self.setObjectName("MainCard")
-        self.setStyleSheet(
-            "QFrame#MainCard { background-color: #ffffff; border: 1px solid #e5e5ea; border-radius: 16px; }"
-        )
-        s = QGraphicsDropShadowEffect()
-        s.setBlurRadius(30)
-        s.setColor(QColor(0, 0, 0, 10))
-        s.setOffset(0, 6)
-        self.setGraphicsEffect(s)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-        self.header = QFrame()
-        self.header.setCursor(Qt.PointingHandCursor)
-        self.header.setStyleSheet("background: transparent; border: none;")
-        header_layout = QHBoxLayout(self.header)
-        header_layout.setContentsMargins(25, 20, 25, 20)
-        text_vbox = QVBoxLayout()
-        text_vbox.setSpacing(4)
-        title_lbl = QLabel(title)
-        title_lbl.setObjectName("SubHeader")
-        title_lbl.setStyleSheet("border: none; background: transparent;")
-        desc_lbl = QLabel(description)
-        desc_lbl.setObjectName("SubText")
-        desc_lbl.setStyleSheet("border: none; background: transparent;")
-        text_vbox.addWidget(title_lbl)
-        text_vbox.addWidget(desc_lbl)
-        header_layout.addLayout(text_vbox)
-        header_layout.addStretch()
-        self.toggle_icon = QLabel()
-        self.toggle_icon.setStyleSheet("background: transparent; border: none;")
-        header_layout.addWidget(self.toggle_icon)
-        layout.addWidget(self.header)
-        self.content_area = QFrame()
-        self.content_area.setStyleSheet("background: transparent; border: none;")
-        self.content_layout = QVBoxLayout(self.content_area)
-        self.content_layout.setContentsMargins(25, 0, 25, 25)
-        self.content_layout.setSpacing(20)
-        layout.addWidget(self.content_area)
-        if start_collapsed:
-            self.content_area.hide()
-            self.toggle_icon.setPixmap(
-                qta.icon("mdi.chevron-down", color="#1D1D1F").pixmap(28, 28)
-            )
-        else:
-            self.content_area.show()
-            self.toggle_icon.setPixmap(
-                qta.icon("mdi.chevron-up", color="#1D1D1F").pixmap(28, 28)
-            )
-        self.header.mousePressEvent = self.toggle_content
-
-    def toggle_content(self, event):
-        is_visible = self.content_area.isVisible()
-        self.content_area.setVisible(not is_visible)
-        icon_name = "mdi.chevron-down" if is_visible else "mdi.chevron-up"
-        self.toggle_icon.setPixmap(qta.icon(icon_name, color="#1D1D1F").pixmap(28, 28))
-
-
 class FileItemWidget(QFrame):
     remove_requested = pyqtSignal(str)
 
@@ -321,7 +516,9 @@ class FileItemWidget(QFrame):
         top_layout = QHBoxLayout()
         top_layout.setContentsMargins(0, 0, 0, 0)
         top_layout.setAlignment(Qt.AlignVCenter)
-
+        self.status_dot = QLabel()
+        self.status_dot.setFixedSize(9, 9)
+        top_layout.addWidget(self.status_dot)
         icon_lbl = QLabel()
         icon_lbl.setPixmap(
             qta.icon("mdi.file-document-outline", color="#515154").pixmap(18, 18)
@@ -358,27 +555,39 @@ class FileItemWidget(QFrame):
             top_layout.addWidget(self.combo)
 
         elif show_gene_input:
-            self.gene_lbl = QLabel("Gene Name:")
-            self.gene_lbl.setStyleSheet(
-                "font-size: 12px; font-weight: 800; color: #0071E3; border: none;"
+            LABEL_CSS = (
+                "font-size: 11px; font-weight: 800; color: #0071E3; border: none;"
             )
+            FIELD_CSS = """
+                QLineEdit { border: 1px solid #0071E3; border-radius: 6px; padding: 2px 8px; font-size: 12px; font-weight: bold; background: white; color: #1D1D1F; }
+                QLineEdit:focus { border: 2px solid #005BB5; }
+            """
+
+            self.org_lbl = QLabel("ORG")
+            self.org_lbl.setStyleSheet(LABEL_CSS)
+            top_layout.addWidget(self.org_lbl)
+
+            self.org_input = QLineEdit()
+            self.org_input.setFixedHeight(28)
+            self.org_input.setFixedWidth(95)
+            self.org_input.setPlaceholderText("organism")
+            self.org_input.setStyleSheet(FIELD_CSS)
+            self.org_input.setText(self._guess_organism())
+            top_layout.addWidget(self.org_input)
+
+            self.gene_lbl = QLabel("GENE")
+            self.gene_lbl.setStyleSheet(LABEL_CSS)
             top_layout.addWidget(self.gene_lbl)
 
             self.gene_input = QLineEdit()
             self.gene_input.setFixedHeight(28)
-            self.gene_input.setFixedWidth(100)
-            self.gene_input.setStyleSheet("""
-                QLineEdit { border: 1px solid #0071E3; border-radius: 6px; padding: 2px 10px; font-size: 12px; font-weight: bold; background: white; color: #1D1D1F; }
-                QLineEdit:focus { border: 2px solid #005BB5; }
-            """)
-
-            if self.strict_gene_parse:
-                detected_gene = common_utils.detect_gene_from_file(self.file_path)
-            else:
-                detected_gene = re.split(r"[_.]", self.filename)[0].upper()
-
-            self.gene_input.setText(detected_gene)
+            self.gene_input.setFixedWidth(80)
+            self.gene_input.setPlaceholderText("gene")
+            self.gene_input.setStyleSheet(FIELD_CSS)
+            self.gene_input.setText(self._guess_gene())
             top_layout.addWidget(self.gene_input)
+            self.org_input.textChanged.connect(self._refresh_dot)
+            self.gene_input.textChanged.connect(self._refresh_dot)
 
         del_btn = QPushButton()
         del_btn.setIcon(qta.icon("mdi.close", color="#8E8E93"))
@@ -400,6 +609,7 @@ class FileItemWidget(QFrame):
         )
         self.pbar.hide()
         layout.addWidget(self.pbar)
+        self._refresh_dot()
 
     def set_headers(self, headers):
         if hasattr(self, "combo"):
@@ -414,9 +624,62 @@ class FileItemWidget(QFrame):
                 if current in headers:
                     self.combo.setCurrentText(current)
 
+    def _name_tokens(self):
+        stem = os.path.splitext(self.filename)[0]
+        return [p for p in re.split(r"[^A-Za-z0-9]+", stem) if p]
+
+    def _guess_organism(self):
+
+        known = set()
+        try:
+            proj = t1_st1_logic.CURRENT_PROJECT_PATH
+            if proj:
+                known = manifest_logic_tab.known_values(proj, "organism")
+        except Exception:
+            pass
+
+        for token in self._name_tokens():
+            if token.lower() in known:
+                return token
+            if organism_names.looks_like_organism(token):
+                return token
+        return ""
+
+    def _guess_gene(self):
+        if self.strict_gene_parse:
+            return common_utils.detect_gene_from_file(self.file_path)
+        parts = self._name_tokens()
+        return parts[1].upper() if len(parts) > 1 else ""
+
+    def get_organism(self):
+        if hasattr(self, "org_input"):
+            return self.org_input.text().strip()
+        return ""
+
+    def get_identity(self):
+        return self.get_organism(), self.get_gene_name()
+
+    def is_complete(self):
+        if not hasattr(self, "gene_input"):
+            return True
+        return bool(self.get_organism()) and bool(self.get_gene_name())
+
+    def _refresh_dot(self):
+        if not hasattr(self, "status_dot"):
+            return
+        if not hasattr(self, "gene_input"):
+            self.status_dot.hide()
+            return
+        ok = self.is_complete()
+        self.status_dot.setStyleSheet(
+            "background-color: %s; border-radius: 4px; border: none;"
+            % (DOT_GREEN if ok else DOT_ORANGE)
+        )
+        self.status_dot.setToolTip("ready" if ok else "organism or gene is missing")
+
     def get_gene_name(self):
         if hasattr(self, "gene_input"):
-            return self.gene_input.text().strip() or "UNKNOWN"
+            return self.gene_input.text().strip()
         return ""
 
     def update_progress(self, val):
@@ -440,6 +703,7 @@ class UnifiedDropZone(QWidget):
         show_gene_input=True,
         open_in_base_dir=False,
         strict_gene_parse=True,
+        default_subdir=None,
     ):
         super().__init__()
         self.supported_exts = [ext.lower() for ext in supported_exts]
@@ -448,6 +712,9 @@ class UnifiedDropZone(QWidget):
         self.show_gene_input = show_gene_input
         self.open_in_base_dir = open_in_base_dir
         self.strict_gene_parse = strict_gene_parse
+        # path parts under the project root to open the browser in, e.g.
+        # ("Results", "Tree_Annotation"). Falls back to the file_type pipeline dir.
+        self.default_subdir = default_subdir
         self.current_files = []
         self.item_widgets = {}
 
@@ -578,10 +845,6 @@ class UnifiedDropZone(QWidget):
         else:
             event.ignore()
 
-    def _drag_hover_leave(self, event):
-        self.is_drag_hover = False
-        self.drop_area.update()
-
     def _drag_leave(self, event):
         self.is_drag_hover = False
         self.drop_area.update()
@@ -607,53 +870,26 @@ class UnifiedDropZone(QWidget):
     def _open_file_dialog(self):
         default_dir = ""
         try:
-            from hyphlow import t1_st1_logic
-
-            if self.open_in_base_dir and getattr(
-                t1_st1_logic, "CURRENT_PROJECT_PATH", None
-            ):
-                default_dir = str(t1_st1_logic.CURRENT_PROJECT_PATH)
-            elif getattr(t1_st1_logic, "CURRENT_PROJECT_PATH", None):
-                p = common_utils.get_pipeline_path(
-                    t1_st1_logic.CURRENT_PROJECT_PATH, "Results", self.file_type
-                )
-                if p and p.exists():
-                    default_dir = str(p)
-                else:
-                    default_dir = str(t1_st1_logic.CURRENT_PROJECT_PATH)
+            proj = getattr(t1_st1_logic, "CURRENT_PROJECT_PATH", None)
+            if proj:
+                default_dir = str(proj)
+                if self.default_subdir:
+                    p = Path(proj).joinpath(*self.default_subdir)
+                    if p.exists():
+                        default_dir = str(p)
+                elif not self.open_in_base_dir:
+                    p = common_utils.get_pipeline_path(proj, "Results", self.file_type)
+                    if p and p.exists():
+                        default_dir = str(p)
         except Exception:
             default_dir = ""
 
         filter_str = " ".join([f"*{ext}" for ext in self.supported_exts])
-        
-        import platform
-        
-       
-        if platform.system() == "Linux":
-            dialog = QFileDialog(self, "Select Files", default_dir, f"Supported Files ({filter_str})")
-            dialog.setFileMode(QFileDialog.ExistingFiles)
-            
-            dialog.setStyleSheet("""
-                QWidget { background-color: #FFFFFF; color: #1D1D1F; }
-                QTreeView, QListView, QTableView { background-color: #FFFFFF; color: #1D1D1F; alternate-background-color: #F2F2F7; outline: none; }
-                QTreeView::item:selected, QListView::item:selected { background-color: #0071E3; color: #FFFFFF; }
-                QHeaderView::section { background-color: #F2F2F7; color: #1D1D1F; border: 1px solid #D1D1D6; padding: 4px; }
-                QPushButton { background-color: #E5E5EA; color: #1D1D1F; border-radius: 4px; padding: 6px 12px; font-weight: bold; }
-                QPushButton:hover { background-color: #D1D1D6; }
-                QLineEdit, QComboBox { background-color: #F5F5F7; color: #1D1D1F; border: 1px solid #D1D1D6; padding: 4px; }
-            """)
-            if dialog.exec_():
-                files = dialog.selectedFiles()
-                if files:
-                    self.add_files(files)
-                    
-        
-        else:
-            files, _ = QFileDialog.getOpenFileNames(
-                self, "Select Files", default_dir, f"Supported Files ({filter_str})"
-            )
-            if files:
-                self.add_files(files)
+        files = pick_files(
+            self, "Select Files", default_dir, f"Supported Files ({filter_str})"
+        )
+        if files:
+            self.add_files(files)
 
     def _trigger_error(self):
         self.is_error = True
@@ -697,6 +933,9 @@ class UnifiedDropZone(QWidget):
 
     def get_all_genes(self):
         return {f: widget.get_gene_name() for f, widget in self.item_widgets.items()}
+
+    def get_all_identities(self):
+        return {f: w.get_identity() for f, w in self.item_widgets.items()}
 
     def remove_file(self, file_path):
         if file_path in self.current_files:
@@ -795,7 +1034,7 @@ class LogConsole(QFrame):
         wsl_layout.setContentsMargins(5, 5, 5, 5)
 
         wsl_header = QHBoxLayout()
-        wsl_title = QLabel("WSL TERMINAL MIRROR")
+        wsl_title = QLabel("TERMINAL OUTPUT")
         wsl_title.setStyleSheet(
             "font-size: 11px; font-weight: 800; color: #8E8E93; border: none;"
         )
@@ -810,12 +1049,11 @@ class LogConsole(QFrame):
         wsl_layout.addLayout(wsl_header)
 
         self.wsl_browser = QTextBrowser()
-        font = QFont("Consolas", 10)
-        self.wsl_browser.setFont(font)
+        self.wsl_browser.setFont(mono_font(10))
         self.wsl_browser.setStyleSheet(
             "QTextBrowser { background-color: #000000; color: #34C759; border: 1px solid #D1D1D6; border-radius: 8px; padding: 8px; outline: none; }"
         )
-        self.wsl_browser.setText("[SYSTEM] WSL Mirror Ready. Waiting for execution...")
+        self.wsl_browser.setText("[SYSTEM] Terminal ready. Waiting for execution...")
         wsl_layout.addWidget(self.wsl_browser)
         clear_wsl_btn.clicked.connect(self.clear_wsl_log)
 
@@ -841,7 +1079,7 @@ class LogConsole(QFrame):
 
     def clear_wsl_log(self):
         self.wsl_browser.clear()
-        self.wsl_browser.append("[SYSTEM] WSL Mirror Ready. Waiting for execution...")
+        self.wsl_browser.append("[SYSTEM] Terminal ready. Waiting for execution...")
 
     def append_log(self, text, default_type="info"):
         timestamp = QTime.currentTime().toString("hh:mm:ss")
@@ -876,7 +1114,7 @@ class LogConsole(QFrame):
                     color, prefix = color_map["process"], "PROCESS"
 
         html = f"""
-        <div style="font-family: 'Consolas', 'Courier New', monospace; font-size: 12px; margin-bottom: 3px;">
+        <div style="font-family: {MONO_FAMILY}; font-size: 12px; margin-bottom: 3px;">
             <span style="color: #AEAEB2;">[{timestamp}]</span>
             <span style="color: {color}; font-weight: bold;">[{prefix}]</span>
             <span style="color: #1D1D1F;">{clean_text}</span>
@@ -908,3 +1146,49 @@ class LogConsole(QFrame):
             self.master_logs.clear()
         except Exception:
             pass
+
+
+def _demo():
+    """Light mode must survive a dark desktop. Run: python -m hyphlow.common_ui"""
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    os.environ["QT_STYLE_OVERRIDE"] = "Adwaita-Dark"
+    os.environ["QT_QPA_PLATFORMTHEME"] = "gtk3"
+    force_light_env()
+    assert "QT_STYLE_OVERRIDE" not in os.environ
+    assert "QT_QPA_PLATFORMTHEME" not in os.environ
+
+    from PyQt5.QtWidgets import QApplication, QMessageBox
+
+    app = QApplication([])
+    dark = QPalette()  # what a dark desktop hands Qt
+    for role in _LIGHT_ROLES:
+        dark.setColor(getattr(QPalette, role), QColor("#1E1E1E"))
+    app.setPalette(dark)
+
+    apply_light_theme(app)
+
+    for role, want in _LIGHT_ROLES.items():
+        got = app.palette().color(getattr(QPalette, role)).name().lower()
+        assert got == want.lower(), f"{role}: {got} != {want}"
+    for role, want in _DISABLED_ROLES.items():
+        got = app.palette().color(QPalette.Disabled, getattr(QPalette, role)).name()
+        assert got.lower() == want.lower(), f"disabled {role}: {got} != {want}"
+
+    def luma(c):
+        return 0.2126 * c.red() + 0.7152 * c.green() + 0.0722 * c.blue()
+
+    for role in ("Window", "Base", "Button", "Light"):
+        assert luma(app.palette().color(getattr(QPalette, role))) > 200, role
+    for role in ("WindowText", "Text", "ButtonText"):
+        assert luma(app.palette().color(getattr(QPalette, role))) < 120, role
+
+    box = QMessageBox(QMessageBox.Warning, "t", "m")
+    box.show()
+    app.processEvents()
+    px = box.grab().toImage().pixelColor(3, 3)
+    assert luma(px) > 200, f"popup rendered dark: {px.name()}"
+    print("ok")
+
+
+if __name__ == "__main__":
+    _demo()
