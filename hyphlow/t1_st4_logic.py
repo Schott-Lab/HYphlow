@@ -1,5 +1,3 @@
-import os
-import sys
 import concurrent.futures
 from pathlib import Path
 from ete3 import Tree
@@ -8,13 +6,8 @@ import datetime
 
 from hyphlow import common_utils
 from hyphlow import t1_st1_logic
+from hyphlow import manifest_logic_tab
 
-try:
-    base = Path(sys._MEIPASS)
-except Exception:
-    base = Path(os.path.abspath("."))
-
-CURRENT_PROJECT_PATH = base
 
 
 def get_results_path():
@@ -123,16 +116,12 @@ def process_pruning_worker(args):
     f_path = Path(fasta_path)
     n_path = Path(nwk_path)
 
-    mmdd = datetime.datetime.now().strftime("%m%d")
-    v = 1
-    while True:
-        new_nwk_name_str = str(Path(out_dir) / f"{user_gene_name}_prn_v{v}_{mmdd}.nwk")
-        new_rep_name_str = str(
-            Path(rep_dir) / f"Rpt_{user_gene_name}_prn_v{v}_{mmdd}.xlsx"
-        )
-        if not Path(new_nwk_name_str).exists() and not Path(new_rep_name_str).exists():
-            break
-        v += 1
+    new_nwk_name_str, _ = common_utils.generate_smart_filename(
+        user_gene_name, "PRN", out_dir, ".nwk", is_report=False
+    )
+    new_rep_name_str, _ = common_utils.generate_smart_filename(
+        user_gene_name, "PRN", rep_dir, ".xlsx", is_report=True
+    )
 
     out_path = Path(new_nwk_name_str)
     rep_path = Path(new_rep_name_str)
@@ -199,6 +188,8 @@ def process_pruning_worker(args):
             "warning": warning_msg,
             "has_mismatch": has_mismatch,
             "out_name": out_name_str,
+            "out_path": str(out_path),
+            "src_path": str(f_path),
             "fasta_name": f_path.name,
             "perfect_count": len(common_taxa),
             "pruned_count": len(missing_in_fasta),
@@ -216,7 +207,7 @@ def process_pruning_worker(args):
         }
 
 
-def run_pruning_pipeline(fasta_files, nwk_files, gene_dict):
+def run_pruning_pipeline(fasta_files, nwk_files, gene_dict, identity_dict=None):
     out_dir = get_results_path()
     rep_dir = get_reports_path()
     if not out_dir or not rep_dir or not nwk_files:
@@ -226,10 +217,17 @@ def run_pruning_pipeline(fasta_files, nwk_files, gene_dict):
     last_rep_path = ""
 
     nwk_target = nwk_files[0]
-    tasks = [
-        (fp, nwk_target, out_dir, rep_dir, gene_dict.get(fp, Path(fp).stem))
-        for fp in fasta_files
-    ]
+    identity_dict = identity_dict or {}
+    proj = t1_st1_logic.CURRENT_PROJECT_PATH
+    tasks = []
+    resolved = {}
+    for fp in fasta_files:
+        typed = identity_dict.get(fp)
+        org, gene = manifest_logic_tab.resolve_identity(proj, fp, typed)
+        resolved[fp] = (org, gene)
+        tasks.append(
+            (fp, nwk_target, out_dir, rep_dir, common_utils.make_base_name(org, gene))
+        )
 
     with concurrent.futures.ThreadPoolExecutor() as executor:
         for result in executor.map(process_pruning_worker, tasks):
@@ -242,6 +240,21 @@ def run_pruning_pipeline(fasta_files, nwk_files, gene_dict):
                     result["success"] = False
                     result["has_mismatch"] = True
                     result["error"] = str(e)
+            if result.get("success") and result.get("out_path"):
+                src = result.get("src_path", "")
+                org, gene = resolved.get(src, ("", ""))
+                try:
+                    manifest_logic_tab.add_row(
+                        t1_st1_logic.CURRENT_PROJECT_PATH,
+                        org,
+                        gene,
+                        "",
+                        "prn",
+                        result["out_path"],
+                        src,
+                    )
+                except Exception as e:
+                    print("manifest write failed:", e)
             results.append(result)
 
     return results, str(last_rep_path)
