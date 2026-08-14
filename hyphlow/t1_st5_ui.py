@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 from PyQt5.QtWidgets import (
     QWidget,
@@ -19,13 +18,14 @@ import qtawesome as qta
 
 from hyphlow import t1_st5_logic
 from hyphlow import t1_st1_logic
-from hyphlow import common_utils
+from hyphlow import manifest_logic_tab
 from hyphlow.common_ui import (
     UnifiedDropZone,
     TableCheckBoxWidget,
     PrimaryButton,
     ActionButton,
 )
+
 
 def create_status_badge(text, bg_color, text_color):
     wrapper = QWidget()
@@ -199,7 +199,7 @@ class ReconResultBlock(QFrame):
             """)
 
             for row, r_data in enumerate(self.corrections):
-                orig, status, sugg, score = r_data[2], r_data[3], r_data[4], r_data[5]
+                orig, status, sugg = r_data[2], r_data[3], r_data[4]
 
                 item_o = QTableWidgetItem(orig)
                 item_s = QTableWidgetItem(sugg)
@@ -395,11 +395,11 @@ class Subtab5ReconUI(QWidget):
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(15)
 
-        self.btn_verify = ActionButton(" Run Verification", "mdi.play")
+        self.btn_verify = PrimaryButton(" Run Verification", "mdi.play")
         self.btn_verify.clicked.connect(self.run_verification)
         btn_layout.addWidget(self.btn_verify, stretch=1)
-        self.btn_apply = PrimaryButton(
-            " Change && Save All Reconciled Files", "mdi.play"
+        self.btn_apply = ActionButton(
+            " Change && Save All Reconciled Files", "mdi.content-save"
         )
         self.btn_apply.setEnabled(False)
         self.btn_apply.clicked.connect(self.apply_changes)
@@ -458,18 +458,29 @@ class Subtab5ReconUI(QWidget):
 
     def run_verification(self):
         self.log_msg.emit("[PROCESS] Initialization: Validating input files...")
+
+        proj = t1_st1_logic.CURRENT_PROJECT_PATH
+        unregistered = []
         for f in self.fasta_files + self.nwk_files:
-            stem_lower = Path(f).stem.lower()
-            if not any(tag in stem_lower for tag in ["_fmt", "_rec", "_tagged"]):
-                self.log_msg.emit(
-                    f"[WARNING] File format error: '{Path(f).name}' lacks required formatting tags ('_fmt', '_rec', or '_tagged')."
+            if not proj:
+                break
+            org, gene = manifest_logic_tab.identity_for_path(proj, f)
+            if not (org or gene):
+                unregistered.append(Path(f).name)
+
+        if unregistered:
+            self.log_msg.emit(
+                "[WARNING] %d file(s) are not in the project manifest: %s"
+                % (
+                    len(unregistered),
+                    ", ".join(unregistered[:3])
+                    + (" ..." if len(unregistered) > 3 else ""),
                 )
-                self.notify_lbl.setText("Format required. Check system log.")
-                self.notify_lbl.setStyleSheet(
-                    "color: #FF3B30; font-weight: bold; border:none; background: transparent;"
-                )
-                self.notify_lbl.show()
-                return
+            )
+            self.log_msg.emit(
+                "[INFO] Proceeding anyway. Results may not be traceable to a "
+                "pipeline stage."
+            )
 
         loaded_types = sum(
             [bool(self.csv_path), len(self.fasta_files) > 0, len(self.nwk_files) > 0]
