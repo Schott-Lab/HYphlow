@@ -1,8 +1,5 @@
 import sys
 import os
-import re
-import platform
-import subprocess
 from pathlib import Path
 
 from PyQt5.QtWidgets import (
@@ -15,9 +12,7 @@ from PyQt5.QtWidgets import (
     QFrame,
     QLabel,
     QStackedWidget,
-    QTextBrowser,
     QProgressBar,
-    QFileDialog,
     QListWidget,
     QListWidgetItem,
     QGraphicsDropShadowEffect,
@@ -27,8 +22,8 @@ from PyQt5.QtWidgets import (
     QScrollArea,
     QSizePolicy,
 )
-from PyQt5.QtGui import QFont, QColor, QPixmap, QIcon, QPainter, QTextCursor, QPalette
-from PyQt5.QtCore import Qt, QSettings, pyqtSignal, QTimer, QTime
+from PyQt5.QtGui import QColor, QPixmap, QIcon
+from PyQt5.QtCore import Qt, QSettings, pyqtSignal, QTimer
 import qtawesome as qta
 
 from hyphlow import t1_st1_logic
@@ -38,7 +33,9 @@ from hyphlow.t1_st5_ui import Subtab5ReconUI
 from hyphlow.t2_tagging_ui import Tab2TaggingUI
 from hyphlow.t3_hyphy_ui import Tab3HyPhyUI
 from hyphlow.t4_summary_ui import Tab4SummaryUI
-from hyphlow.common_ui import LogConsole
+from hyphlow import common_ui
+from hyphlow.common_ui import LogConsole, open_path, message_box
+from hyphlow import manifest_logic_tab
 
 
 def get_logo_path():
@@ -47,6 +44,7 @@ def get_logo_path():
         return base / "assets" / "logo.png"
     except Exception:
         return Path(__file__).resolve().parent / "assets" / "logo.png"
+
 
 class SpinnerLabel(QLabel):
     def __init__(self, size=16, color="#0071E3"):
@@ -60,7 +58,7 @@ class SpinnerLabel(QLabel):
         self.setAlignment(Qt.AlignCenter)
         self.setFixedSize(size + 10, size + 10)
         self.setStyleSheet(
-            f"color: {self.color}; font-weight: 900; font-size: {size + 4}px; font-family: 'Consolas', monospace;"
+            f"color: {self.color}; font-weight: 900; font-size: {size + 4}px; font-family: {common_ui.MONO_FAMILY};"
         )
         self.setText(self.frames[0])
 
@@ -176,17 +174,18 @@ class StartupDialog(QDialog):
         layout.addLayout(btn_layout)
 
     def browse_folder(self):
-        folder = QFileDialog.getExistingDirectory(
-            self, "Select Project Workspace"
-        )
+        folder = common_ui.pick_dir(self, "Select Project Workspace")
         if folder:
             self.path_input.setText(folder)
 
     def start_project(self):
         if not self.path_input.text():
-            QMessageBox.warning(
-                self, "Warning", "Please select a Workspace folder to continue."
-            )
+            message_box(
+                self,
+                QMessageBox.Warning,
+                "Warning",
+                "Please select a Workspace folder to continue.",
+            ).exec_()
             return
         proj_name = self.name_input.text()
         self.settings.setValue("last_project_name", proj_name)
@@ -331,7 +330,6 @@ class HyphlowMain(QMainWindow):
         logo_path = get_logo_path()
         if os.path.exists(logo_path):
             self.setWindowIcon(QIcon(str(logo_path)))
-        QApplication.setFont(QFont("Segoe UI", 10))
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QHBoxLayout(central)
@@ -539,7 +537,60 @@ class HyphlowMain(QMainWindow):
         prog_vbox.addWidget(hyphy_block)
         self.wf_blocks["hyphy"] = hyphy_block
         col1_layout.addWidget(self.prog_card)
-        col1_layout.addStretch()
+        self.prog_card.setVisible(False)
+        self.manifest_card = QFrame()
+        self.manifest_card.setObjectName("DashCard")
+        apply_shadow(self.manifest_card)
+        mf_vbox = QVBoxLayout(self.manifest_card)
+        mf_vbox.setContentsMargins(25, 25, 25, 25)
+        mf_vbox.setSpacing(8)
+        mf_vbox.addWidget(
+            QLabel(
+                "Project Manifest",
+                styleSheet="font-size: 16px; font-weight: bold; color: #1D1D1F;",
+            )
+        )
+        self.manifest_label = QLabel("No workspace selected.")  # 추가
+        self.manifest_label.setStyleSheet("font-size: 13px; color: #8E8E93;")
+        self.manifest_label.setWordWrap(True)
+        mf_vbox.addWidget(self.manifest_label)
+
+        def make_section(color):
+            header = QLabel()
+            header.setStyleSheet(
+                f"font-size: 13px; font-weight: 600; color: {color}; border: none;"
+            )
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.NoFrame)
+            scroll.setMinimumHeight(70)
+            scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+            scroll.setStyleSheet(
+                "QScrollArea { border: none; background: transparent; }"
+            )
+            holder = QWidget()
+            holder.setStyleSheet("background: transparent;")
+            box = QVBoxLayout(holder)
+            box.setContentsMargins(0, 0, 0, 0)
+            box.setSpacing(3)
+            box.addStretch()
+            scroll.setWidget(holder)
+            return header, scroll, box
+
+        self.mf_bad_header, self.mf_bad_scroll, self.mf_bad_box = make_section(
+            "#FF9500"
+        )
+        mf_vbox.addWidget(self.mf_bad_header)
+        mf_vbox.addWidget(self.mf_bad_scroll)
+
+        self.mf_good_header, self.mf_good_scroll, self.mf_good_box = make_section(
+            "#34C759"
+        )
+        mf_vbox.addWidget(self.mf_good_header)
+        mf_vbox.addWidget(self.mf_good_scroll)
+        mf_vbox.addStretch()
+
+        col1_layout.addWidget(self.manifest_card, stretch=1)
         col2_layout = QVBoxLayout()
         col2_layout.setSpacing(20)
         self.res_card = QFrame()
@@ -701,9 +752,7 @@ class HyphlowMain(QMainWindow):
         self.switch_subtab(2)
 
     def set_workspace(self):
-        folder = QFileDialog.getExistingDirectory(
-            self, "Select Project Workspace"
-        )
+        folder = common_ui.pick_dir(self, "Select Project Workspace")
         if folder:
             self.path_label.setText(folder)
             self.path_label.setStyleSheet(
@@ -713,9 +762,76 @@ class HyphlowMain(QMainWindow):
             self.add_log(f"[Success] Workspace set to: {folder}")
             self.refresh_dashboard_files()
 
+    def _clear_box(self, box):
+        while box.count():
+            item = box.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+
+    def _add_line(self, box, text, color, mono=False):
+        lbl = QLabel(text)
+        font = "font-family: monospace; " if mono else ""
+        lbl.setStyleSheet(
+            f"{font}font-size: 12px; color: {color}; border: none; padding-left: 14px;"
+        )
+        lbl.setWordWrap(True)
+        box.addWidget(lbl)
+
+    def refresh_manifest_card(self):
+        self._clear_box(self.mf_bad_box)
+        self._clear_box(self.mf_good_box)
+        proj = t1_st1_logic.CURRENT_PROJECT_PATH
+
+        if not proj:
+            self.manifest_label.setText("No workspace selected.")
+            self.mf_bad_header.setText("")
+            self.mf_good_header.setText("")
+            self.mf_bad_box.addStretch()
+            self.mf_good_box.addStretch()
+            return
+        try:
+            rows = manifest_logic_tab.read_rows(proj)
+        except Exception as e:
+            self.manifest_label.setText(f"Could not read manifest: {e}")
+            return
+
+        rows = manifest_logic_tab.latest_rows(rows)
+        groups = manifest_logic_tab.group_by_gene(rows)
+        checks = manifest_logic_tab.check_rows(proj, rows)
+        bad = [c for c in checks if c["status"] != manifest_logic_tab.OK]
+        good = [c for c in checks if c["status"] == manifest_logic_tab.OK]
+        bad.sort(key=lambda c: 0 if c["status"] == manifest_logic_tab.ERROR else 1)
+
+        self.manifest_label.setText(f"{len(rows)} files · {len(groups)} groups")
+        self.manifest_label.setStyleSheet("font-size: 13px; color: #8E8E93;")
+
+        self.mf_bad_header.setText(f"Needs attention ({len(bad)})")
+        for c in bad:
+            name = Path(c["row"].get("path", "")).name or "(no path)"
+            reasons = ", ".join(m for _, m in c["problems"])
+            self._add_line(self.mf_bad_box, f"{name} — {reasons}", "#FF9500", mono=True)
+        if not bad:
+            self._add_line(self.mf_bad_box, "nothing to fix", "#8E8E93")
+
+        self.mf_good_header.setText(f"Ready ({len(good)})")
+        for c in good:
+            r = c["row"]
+            org = r.get("organism") or "?"
+            tag = (r.get("tag") or "").strip()
+            line = f"{org} · {r.get('gene', '')} · {r.get('stage', '')}"
+            if tag:
+                line += f" · {tag}"
+            self._add_line(self.mf_good_box, line, "#1D1D1F")
+        if not good:
+            self._add_line(self.mf_good_box, "nothing ready yet", "#8E8E93")
+
+        self.mf_bad_box.addStretch()
+        self.mf_good_box.addStretch()
+
     def refresh_dashboard_files(self):
         self.file_list.clear()
-
+        self.refresh_manifest_card()
         if not t1_st1_logic.CURRENT_PROJECT_PATH:
             return
 
@@ -727,7 +843,7 @@ class HyphlowMain(QMainWindow):
             if p and p.exists():
                 for root, dirs, files in os.walk(p):
                     for f in files:
-                        if not f.startswith("~$") and not f.endswith(".json"):
+                        if not f.startswith("~$") and not f.lower().endswith(".json"):
                             try:
                                 full_path = Path(root) / f
                                 mtime = os.path.getmtime(full_path)
@@ -768,15 +884,7 @@ class HyphlowMain(QMainWindow):
             self._open_path_cross_platform(file_path)
 
     def _open_path_cross_platform(self, path):
-        try:
-            if platform.system() == "Windows":
-                os.startfile(path)
-            elif platform.system() == "Darwin":
-                subprocess.call(["open", path])
-            else:
-                subprocess.call(["xdg-open", path])
-        except Exception as e:
-            self.add_log(f"[Error] Failed to open path: {str(e)}")
+        open_path(path)
 
     def update_dataprep_progress(self, filename, percent, status_text):
         self.wf_blocks["data_prep"].update_file_progress(filename, percent, status_text)
@@ -891,70 +999,9 @@ class HyphlowMain(QMainWindow):
 
 
 def main():
+    common_ui.force_light_env()  # before QApplication: Qt reads these at startup
     app = QApplication(sys.argv)
-    app.setStyle("Fusion")
-
-    light_palette = QPalette()
-    light_palette.setColor(QPalette.Window, QColor("#FFFFFF"))
-    light_palette.setColor(QPalette.WindowText, QColor("#1D1D1F"))
-    light_palette.setColor(QPalette.Base, QColor("#FFFFFF"))
-    light_palette.setColor(QPalette.AlternateBase, QColor("#F2F2F7"))
-    light_palette.setColor(QPalette.ToolTipBase, QColor("#FFFFFF"))
-    light_palette.setColor(QPalette.ToolTipText, QColor("#1D1D1F"))
-    light_palette.setColor(QPalette.Text, QColor("#1D1D1F"))
-    light_palette.setColor(QPalette.Button, QColor("#F2F2F7"))
-    light_palette.setColor(QPalette.ButtonText, QColor("#1D1D1F"))
-    light_palette.setColor(QPalette.BrightText, QColor("#FFFFFF"))
-    light_palette.setColor(QPalette.Highlight, QColor("#0071E3"))
-    light_palette.setColor(QPalette.HighlightedText, QColor("#FFFFFF"))
-    app.setPalette(light_palette)
-
-    global_stylesheet = """
-    QMainWindow, QDialog, QFileDialog, QMessageBox { 
-        background-color: #FFFFFF; 
-        font-family: 'Roboto', -apple-system, 'Segoe UI', sans-serif;
-        color: #1D1D1F;
-    }
-    QFileDialog, QFileDialog * {
-        background-color: #FFFFFF;
-        color: #1D1D1F;
-    }
-    QFileDialog QTreeView, QFileDialog QListView, QFileDialog QTableView {
-        background-color: #FFFFFF;
-        color: #1D1D1F;
-        selection-background-color: #0071E3;
-        selection-color: #FFFFFF;
-    }
-    QFileDialog QHeaderView::section {
-        background-color: #F2F2F7;
-        color: #1D1D1F;
-        border: none;
-        border-right: 1px solid #D1D1D6;
-        border-bottom: 1px solid #D1D1D6;
-        padding: 4px;
-    }
-    QFileDialog QPushButton, QFileDialog QComboBox, QFileDialog QLineEdit {
-        background-color: #F5F5F7;
-        color: #1D1D1F;
-        border: 1px solid #D1D1D6;
-        border-radius: 4px;
-    }
-    QLabel#MainTitle { font-size: 24px; font-weight: 800; color: #1D1D1F; background: transparent; border: none; }
-    QLabel#SectionHeader { font-size: 20px; font-weight: 700; color: #1D1D1F; background: transparent; border: none; }
-    QLabel#SubHeader { font-size: 18px; font-weight: 500; color: #1D1D1F; background: transparent; border: none; }
-    QLabel#SubText { font-size: 14px; font-weight: 400; color: #8E8E93; background: transparent; border: none; }
-    QScrollBar:vertical { border: none; background: transparent; width: 8px; margin: 0px; }
-    QScrollBar::handle:vertical { background-color: #D1D1D6; border-radius: 4px; min-height: 20px; }
-    QScrollBar::handle:vertical:hover { background-color: #8E8E93; }
-    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
-    QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { border: none; background: none; height: 0px; }
-    QScrollBar:horizontal { border: none; background: transparent; height: 8px; margin: 0px; }
-    QScrollBar::handle:horizontal { background-color: #D1D1D6; border-radius: 4px; min-width: 20px; }
-    QScrollBar::handle:horizontal:hover { background-color: #8E8E93; }
-    QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal,
-    QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { border: none; background: none; width: 0px; }
-    """
-    app.setStyleSheet(global_stylesheet)
+    common_ui.apply_light_theme(app)
 
     startup_dialog = StartupDialog()
     if startup_dialog.exec() == QDialog.Accepted:
@@ -963,6 +1010,7 @@ def main():
         sys.exit(app.exec())
     else:
         sys.exit(0)
+
 
 if __name__ == "__main__":
     main()
