@@ -2,7 +2,6 @@ import sys
 import os
 import csv
 import warnings
-import re
 from pathlib import Path
 import taxopy
 from rapidfuzz import fuzz
@@ -39,7 +38,11 @@ def get_reports_path():
 
 
 def get_error_reports_path():
-    return common_utils.get_pipeline_path(CURRENT_PROJECT_PATH, "Error_reports", "CSV")
+    if not CURRENT_PROJECT_PATH:
+        return None
+    path = Path(CURRENT_PROJECT_PATH) / "Reports" / "Error_Reports"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def get_resource_path(relative_path):
@@ -51,14 +54,23 @@ def get_resource_path(relative_path):
 
 
 def get_taxdb():
+    # Workspace copy wins; cwd is the fallback so one shared DB can serve every project.
     global _taxdb_cache
     if _taxdb_cache is None:
-        db_path = Path.cwd() / "taxopy_db"
+        searched = [
+            p / "taxopy_db"
+            for p in (CURRENT_PROJECT_PATH, Path.cwd())
+            if p is not None
+        ]
+        db_path = next(
+            (p for p in searched if (p / "nodes.dmp").exists()), searched[-1]
+        )
         try:
             _taxdb_cache = taxopy.TaxDb(taxdb_dir=str(db_path))
         except Exception as e:
             raise RuntimeError(
-                f"Failed to load TaxDb. Ensure nodes.dmp and names.dmp exist in {db_path}. Error: {e}"
+                "Failed to load TaxDb. Ensure nodes.dmp and names.dmp exist in one of: "
+                f"{', '.join(str(p) for p in searched)}. Error: {e}"
             )
     return _taxdb_cache
 
@@ -264,10 +276,6 @@ def apply_and_save_corrections(
             ws_sum.write("B4", new_csv_path.name)
 
             perfect_cnt = sum(1 for r in all_results if r[1] == "PERFECT")
-            similar_cnt = sum(
-                1 for r in all_results if r[1] in ["SIMILAR", "SUBS_NOT_FOUND"]
-            )
-            error_cnt = sum(1 for r in all_results if r[1] in ["NOT_FOUND", "ERROR"])
 
             ws_sum.write("A6", "--- Statistics ---", bold_fmt)
             ws_sum.write("A7", "Total Validated Names", bold_fmt)
