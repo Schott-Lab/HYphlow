@@ -1,11 +1,10 @@
 import os
+import re
 import sys
 import time
 import shutil
 import datetime
-import types
 import traceback
-import subprocess
 from pathlib import Path
 from PyQt5.QtWidgets import (
     QWidget,
@@ -15,9 +14,7 @@ from PyQt5.QtWidgets import (
     QFrame,
     QLabel,
     QTextEdit,
-    QFileDialog,
     QSplitter,
-    QLayout,
     QTreeWidget,
     QTreeWidgetItem,
     QHeaderView,
@@ -31,14 +28,11 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import (
     Qt,
     QPoint,
-    QRect,
-    QSize,
     pyqtSignal,
     QPropertyAnimation,
     QProcess,
     QTimer,
 )
-from PyQt5.QtGui import QFont, QColor, QPainter, QPen, QTextCursor
 import qtawesome as qta
 from hyphlow import t3_hyphy_logic
 from hyphlow import common_utils
@@ -46,84 +40,22 @@ from hyphlow import t1_st1_logic
 from hyphlow.common_ui import (
     UnifiedDropZone,
     PrimaryButton,
+    mono_font,
+    pick_save,
 )
 
-
-class FlowLayout(QLayout):
-    def __init__(self, parent=None, margin=0, spacing=-1):
-        super().__init__(parent)
-        self.setContentsMargins(margin, margin, margin, margin)
-        self.setSpacing(spacing)
-        self.itemList = []
-
-    def __del__(self):
-        item = self.takeAt(0)
-        while item:
-            item = self.takeAt(0)
-
-    def addItem(self, item):
-        self.itemList.append(item)
-
-    def count(self):
-        return len(self.itemList)
-
-    def itemAt(self, index):
-        return self.itemList[index] if 0 <= index < len(self.itemList) else None
-
-    def takeAt(self, index):
-        return self.itemList.pop(index) if 0 <= index < len(self.itemList) else None
-
-    def expandingDirections(self):
-        return Qt.Orientations(0)
-
-    def hasHeightForWidth(self):
-        return True
-
-    def heightForWidth(self, width):
-        return self.doLayout(QRect(0, 0, width, 0), True)
-
-    def setGeometry(self, rect):
-        super().setGeometry(rect)
-        self.doLayout(rect, False)
-
-    def sizeHint(self):
-        return self.minimumSize()
-
-    def minimumSize(self):
-        size = QSize()
-        for item in self.itemList:
-            if item is not None and item.widget() is not None:
-                size = size.expandedTo(item.minimumSize())
-        margins = self.contentsMargins()
-        size += QSize(
-            margins.left() + margins.right(), margins.top() + margins.bottom()
-        )
-        return size
-
-    def doLayout(self, rect, testOnly):
-        x, y, lineHeight = rect.x(), rect.y(), 0
-        spacing = self.spacing()
-        for item in self.itemList:
-            if item is None or item.widget() is None:
-                continue
-            nextX = x + item.sizeHint().width() + spacing
-            if nextX - spacing > rect.right() and lineHeight > 0:
-                x, y = rect.x(), y + lineHeight + spacing
-                nextX, lineHeight = x + item.sizeHint().width() + spacing, 0
-            if not testOnly:
-                item.setGeometry(QRect(QPoint(x, y), item.sizeHint()))
-            x = nextX
-            lineHeight = max(lineHeight, item.sizeHint().height())
-        return y + lineHeight - rect.y()
+CONSENSUS_STEPS = ("Strict", "Majority", "Fitch", "Sankoff", "Felsenstein")
 
 
-class FlowContainer(QWidget):
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        if self.layout():
-            h = self.layout().heightForWidth(self.width())
-            if self.minimumHeight() != h:
-                self.setMinimumHeight(h)
+def _tag_from_tree_name(tree_path):
+    """Tag between _annotated_ and the consensus-step marker, or "" if absent.
+
+    Read as a span rather than one token: a tag such as Freshwater_Fresh_Marine
+    contains underscores itself.
+    """
+    stem = Path(tree_path).stem
+    m = re.search(r"_annotated_(.+?)_(?:%s)" % "|".join(CONSENSUS_STEPS), stem)
+    return m.group(1) if m else ""
 
 
 class Tab3HyPhyUI(QWidget):
@@ -233,99 +165,12 @@ class Tab3HyPhyUI(QWidget):
             show_dropdown=False,
             file_type="nwk",
             show_gene_input=False,
+            default_subdir=("Results", "Tree_Annotation"),
         )
         self.dz_nwk.files_updated.connect(self.handle_nwk_files)
         nc_layout.addWidget(self.dz_nwk)
         dz_layout.addWidget(self.nwk_container, 1)
 
-        def custom_fasta_browse(self_dz):
-            default_dir = (
-                str(
-                    t1_st1_logic.CURRENT_PROJECT_PATH
-                    / "Results"
-                    / "Data_Preparation"
-                    / "FASTA"
-                )
-                if t1_st1_logic.CURRENT_PROJECT_PATH
-                else ""
-            )
-            import platform
-
-            if platform.system() == "Linux":
-                dialog = QFileDialog(
-                    self_dz,
-                    "Select FASTA Files",
-                    default_dir,
-                    "FASTA Files (*.fas *.fasta *.fa)",
-                )
-                dialog.setFileMode(QFileDialog.ExistingFiles)
-                dialog.setStyleSheet("""
-                    QWidget { background-color: #FFFFFF; color: #1D1D1F; }
-                    QTreeView, QListView, QTableView { background-color: #FFFFFF; color: #1D1D1F; alternate-background-color: #F2F2F7; outline: none; }
-                    QTreeView::item:selected, QListView::item:selected { background-color: #0071E3; color: #FFFFFF; }
-                    QHeaderView::section { background-color: #F2F2F7; color: #1D1D1F; border: 1px solid #D1D1D6; padding: 4px; }
-                    QPushButton { background-color: #E5E5EA; color: #1D1D1F; border-radius: 4px; padding: 6px 12px; font-weight: bold; }
-                    QPushButton:hover { background-color: #D1D1D6; }
-                    QLineEdit, QComboBox { background-color: #F5F5F7; color: #1D1D1F; border: 1px solid #D1D1D6; padding: 4px; }
-                """)
-                if dialog.exec_():
-                    files = dialog.selectedFiles()
-                    if files:
-                        self_dz.add_files(files)
-            else:
-                files, _ = QFileDialog.getOpenFileNames(
-                    self_dz,
-                    "Select FASTA Files",
-                    default_dir,
-                    "FASTA Files (*.fas *.fasta *.fa)",
-                )
-                if files:
-                    self_dz.add_files(files)
-
-        self.dz_fasta._open_file_dialog = types.MethodType(
-            custom_fasta_browse, self.dz_fasta
-        )
-
-        def custom_nwk_browse(self_dz):
-            default_dir = (
-                str(t1_st1_logic.CURRENT_PROJECT_PATH / "Results" / "Tree_Annotation")
-                if t1_st1_logic.CURRENT_PROJECT_PATH
-                else ""
-            )
-            import platform
-
-            if platform.system() == "Linux":
-                dialog = QFileDialog(
-                    self_dz,
-                    "Select NWK Files",
-                    default_dir,
-                    "NWK Files (*.nwk *.tre *.tree)",
-                )
-                dialog.setFileMode(QFileDialog.ExistingFiles)
-                dialog.setStyleSheet("""
-                    QWidget { background-color: #FFFFFF; color: #1D1D1F; }
-                    QTreeView, QListView, QTableView { background-color: #FFFFFF; color: #1D1D1F; alternate-background-color: #F2F2F7; outline: none; }
-                    QTreeView::item:selected, QListView::item:selected { background-color: #0071E3; color: #FFFFFF; }
-                    QHeaderView::section { background-color: #F2F2F7; color: #1D1D1F; border: 1px solid #D1D1D6; padding: 4px; }
-                    QPushButton { background-color: #E5E5EA; color: #1D1D1F; border-radius: 4px; padding: 6px 12px; font-weight: bold; }
-                    QPushButton:hover { background-color: #D1D1D6; }
-                    QLineEdit, QComboBox { background-color: #F5F5F7; color: #1D1D1F; border: 1px solid #D1D1D6; padding: 4px; }
-                """)
-                if dialog.exec_():
-                    files = dialog.selectedFiles()
-                    if files:
-                        self_dz.add_files(files)
-            else:
-                files, _ = QFileDialog.getOpenFileNames(
-                    self_dz,
-                    "Select NWK Files",
-                    default_dir,
-                    "NWK Files (*.nwk *.tre *.tree)",
-                )
-                if files:
-                    self_dz.add_files(files)
-
-        self.dz_nwk._open_file_dialog = types.MethodType(custom_nwk_browse, self.dz_nwk)
         input_content_layout.addLayout(dz_layout)
         self.btn_auto_match = PrimaryButton(" Run Auto Match", "mdi.play")
         self.btn_auto_match.clicked.connect(self.process_matching)
@@ -402,15 +247,42 @@ class Tab3HyPhyUI(QWidget):
 
         self.chk_triplicate = QCheckBox("Enable Triplicate Runs (Avoid Local Optima)")
         self.chk_triplicate.setStyleSheet(
-            "color: #1D1D1F; font-weight: 600; font-size: 11px; padding: 4px 0px;"
+            "QCheckBox { background: transparent; padding: 0px; border: none; "
+            "color: #1D1D1F; font-weight: 600; font-size: 12px; }"
+            "QCheckBox::indicator { width: 16px; height: 16px; "
+            "border: 1px solid #C7C7CC; border-radius: 4px; background: white; }"
+            "QCheckBox::indicator:checked { background: #1D1D1F; "
+            "border: 1px solid #1D1D1F; }"
         )
         self.chk_triplicate.stateChanged.connect(self.update_script_preview)
         cl_layout.addWidget(self.chk_triplicate)
 
-        self.queue_container = FlowContainer()
-        self.queue_container.setStyleSheet("background: transparent; border: none;")
-        self.queue_layout = FlowLayout(self.queue_container, margin=0, spacing=8)
-        cl_layout.addWidget(self.queue_container)
+        # A table rather than pills: with 20+ jobs the pills all read the same,
+        # because what distinguishes them (gene, tag) sits in the middle of a
+        # filename that gets elided away.
+        self.queue_table = QTableWidget(0, 6)
+        self.queue_table.setHorizontalHeaderLabels(
+            ["Gene", "Alignment", "Tree", "Tag", "Model", ""]
+        )
+        self.queue_table.verticalHeader().setVisible(False)
+        self.queue_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.queue_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.queue_table.setAlternatingRowColors(True)
+        self.queue_table.setMinimumHeight(260)
+        self.queue_table.verticalHeader().setDefaultSectionSize(30)
+        self.queue_table.setStyleSheet(
+            "QTableWidget { background: white; border: 1px solid #E5E5EA;"
+            " border-radius: 8px; gridline-color: #F0F0F0; font-size: 12px; }"
+            "QHeaderView::section { background: #FAFAFA; color: #6E6E73;"
+            " border: none; border-bottom: 1px solid #E5E5EA; padding: 6px;"
+            " font-weight: bold; }"
+        )
+        hh = self.queue_table.horizontalHeader()
+        hh.setSectionResizeMode(1, QHeaderView.Stretch)
+        hh.setSectionResizeMode(2, QHeaderView.Stretch)
+        for col in (0, 3, 4, 5):
+            hh.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+        cl_layout.addWidget(self.queue_table)
         self.builder_frame = QFrame()
         self.builder_frame.setStyleSheet(
             "QFrame { background-color: #FAFAFA; border: 1px solid #E5E5EA; border-radius: 8px; }"
@@ -507,11 +379,29 @@ class Tab3HyPhyUI(QWidget):
         top_cpu.addWidget(self.combo_cpu)
         top_cpu.addStretch()
         cpu_layout.addLayout(top_cpu)
-        desc_lbl = QLabel(f"Recommended max CPU: {rec_cores}")
-        desc_lbl.setStyleSheet(
+
+        min_cpu_row = QHBoxLayout()
+        min_cpu_row.addWidget(
+            QLabel(
+                "Min CPU per task:",
+                styleSheet="font-size: 13px; color: #1D1D1F; font-weight: bold; border: none; background: transparent;",
+            )
+        )
+        self.combo_min_cpu = QComboBox()
+        self.combo_min_cpu.setStyleSheet(self.combo_cpu.styleSheet())
+        self.combo_min_cpu.addItems([str(i) for i in range(1, 5)])
+        self.combo_min_cpu.setCurrentText("2")
+        self.combo_min_cpu.currentTextChanged.connect(self.update_script_preview)
+        min_cpu_row.addWidget(self.combo_min_cpu)
+        min_cpu_row.addStretch()
+        cpu_layout.addLayout(min_cpu_row)
+
+        self.cpu_desc_lbl = QLabel(f"Recommended max CPU: {rec_cores}")
+        self.cpu_desc_lbl.setStyleSheet(
             "color: #8E8E93; font-size: 11px; border: none; background: transparent; padding-left: 2px;"
         )
-        cpu_layout.addWidget(desc_lbl)
+        self.cpu_desc_lbl.setWordWrap(True)
+        cpu_layout.addWidget(self.cpu_desc_lbl)
         cl_layout.addLayout(cpu_layout)
         left_layout.addWidget(config_box)
         left_layout.addStretch()
@@ -546,7 +436,7 @@ class Tab3HyPhyUI(QWidget):
         ed_layout.addLayout(ed_header)
         self.script_editor = QTextEdit()
         self.script_editor.setMinimumHeight(350)
-        self.script_editor.setFont(QFont("Consolas", 10))
+        self.script_editor.setFont(mono_font(10))
         self.script_editor.setStyleSheet(
             "QTextEdit { background-color: #2D2D30; color: #D4D4D4; border: 1px solid #D1D1D6; border-radius: 8px; padding: 10px; }"
         )
@@ -789,60 +679,106 @@ class Tab3HyPhyUI(QWidget):
                     "has_fg": p["has_fg"],
                 }
                 self.job_queue.append(new_job)
-                self.render_queue_pill(new_job)
                 added_count += 1
         if added_count > 0:
+            self.refresh_queue_table()
             self.update_script_preview()
             self.hide_builder()
 
-    def render_queue_pill(self, job):
-        pill = QFrame()
-        pill.setStyleSheet(
-            "QFrame { background-color: #F5F5F7; border: 1px solid #D1D1D6; border-radius: 12px; }"
-        )
-        pill_layout = QHBoxLayout(pill)
-        pill_layout.setContentsMargins(10, 4, 10, 4)
-        pill_layout.setSpacing(6)
-        model_lbl = QLabel(job["model"])
-        model_lbl.setStyleSheet(
-            "font-weight: 900; font-size: 11px; color: #0071E3; border: none; background: transparent;"
-        )
-        disp_f, disp_t = self.format_display_names(
-            Path(job["fasta"]).name, Path(job["tree"]).name
-        )
-        t_lbl = QLabel(disp_t)
-        t_lbl.setStyleSheet(
-            "font-weight: 500; font-size: 11px; color: #1D1D1F; border: none; background: transparent;"
-        )
-        btn_del = QPushButton("X")
-        btn_del.setFixedSize(16, 16)
-        btn_del.setCursor(Qt.PointingHandCursor)
-        btn_del.setStyleSheet("""
-            QPushButton { border: none; background: transparent; font-weight: bold; color: #8E8E93; font-size: 10px; border-radius: 8px; }
-            QPushButton:hover { background: #FFECEB; color: #FF3B30; }
-        """)
-        btn_del.clicked.connect(lambda: self.remove_job_from_queue(job["job_id"], pill))
-        pill_layout.addWidget(model_lbl)
-        pill_layout.addWidget(
-            QLabel(
-                "|", styleSheet="color: #D1D1D6; border: none; background: transparent;"
-            )
-        )
-        pill_layout.addWidget(t_lbl)
-        pill_layout.addWidget(btn_del)
-        self.queue_layout.addItem(self.queue_layout.addWidget(pill))
+    def refresh_queue_table(self):
+        self.queue_table.setRowCount(0)
+        for job in self.job_queue:
+            row = self.queue_table.rowCount()
+            self.queue_table.insertRow(row)
 
-    def remove_job_from_queue(self, job_id, pill_widget):
+            gene = t3_hyphy_logic._gene_from_stem(Path(job["tree"]).stem) or "?"
+            tag = _tag_from_tree_name(job["tree"]) or "—"
+            values = [
+                gene,
+                Path(job["fasta"]).stem,
+                Path(job["tree"]).stem,
+                tag,
+                job["model"].upper(),
+            ]
+            for col, text in enumerate(values):
+                item = QTableWidgetItem(text)
+                item.setToolTip(text)
+                self.queue_table.setItem(row, col, item)
+
+            btn_del = QPushButton("Remove")
+            btn_del.setFixedHeight(24)
+            btn_del.setCursor(Qt.PointingHandCursor)
+            btn_del.setStyleSheet(
+                "QPushButton { border: 1px solid #FFB3AD; border-radius: 6px;"
+                " background: #FFF5F4; color: #C1543A; font-size: 11px;"
+                " font-weight: bold; padding: 2px 10px; }"
+                "QPushButton:hover { background: #FF3B30; color: white;"
+                " border: 1px solid #FF3B30; }"
+            )
+            btn_del.clicked.connect(
+                lambda _, jid=job["job_id"]: self.remove_job_from_queue(jid)
+            )
+            self.queue_table.setCellWidget(row, 5, btn_del)
+
+    def remove_job_from_queue(self, job_id):
+        before = len(self.job_queue)
         self.job_queue = [j for j in self.job_queue if j["job_id"] != job_id]
-        self.queue_layout.removeWidget(pill_widget)
-        pill_widget.deleteLater()
+        self.refresh_queue_table()
         self.update_script_preview()
+        if len(self.job_queue) < before:
+            self.log_msg.emit(
+                "[INFO] Removed 1 job. %d remaining in queue." % len(self.job_queue)
+            )
+
+    def update_cpu_desc(self):
+        """Show how the two CPU settings translate into a run plan."""
+        try:
+            threads = int(self.combo_cpu.currentText())
+            min_cpu = int(self.combo_min_cpu.currentText())
+        except (ValueError, AttributeError):
+            return
+
+        n_tasks = len(self.job_queue) * (3 if self.chk_triplicate.isChecked() else 1)
+        if n_tasks == 0:
+            self.cpu_desc_lbl.setText(
+                "%d cores available. Add a job to see the run plan." % threads
+            )
+            return
+
+        cores_each = min(max(min_cpu, threads // max(1, n_tasks)), 4)
+        concurrent = max(1, threads // cores_each)
+        waves = -(-n_tasks // concurrent)
+
+        text = "%d task(s): %d at a time, %d CPU each  (%d round%s)" % (
+            n_tasks,
+            concurrent,
+            cores_each,
+            waves,
+            "" if waves == 1 else "s",
+        )
+        # Extra cores inside one HyPhy run scale poorly (2 CPU = 65% efficient,
+        # 4 CPU = 51%), while running separate jobs side by side does not, so
+        # fewer rounds finishes the batch sooner.
+        if waves > 1 and cores_each > 1:
+            best_conc = max(1, threads)
+            best_waves = -(-n_tasks // best_conc)
+            if best_waves < waves:
+                text += (
+                    "\nFewer rounds finish sooner. 1 CPU each would be %d round%s."
+                    % (best_waves, "" if best_waves == 1 else "s")
+                )
+        self.cpu_desc_lbl.setText(text)
 
     def update_script_preview(self):
+        self.update_cpu_desc()
         self.is_generating_script = True
         threads = int(self.combo_cpu.currentText())
+        min_cpu = int(self.combo_min_cpu.currentText())
         script_content = t3_hyphy_logic.generate_bash_script(
-            self.job_queue, threads, self.chk_triplicate.isChecked()
+            self.job_queue,
+            threads,
+            self.chk_triplicate.isChecked(),
+            min_cores=min_cpu,
         )
         self.script_editor.setText(script_content)
         self.is_generating_script = False
@@ -882,26 +818,16 @@ class Tab3HyPhyUI(QWidget):
             errors.append("Unbalanced curly braces {}")
 
         if errors:
-            self.btn_run_hyphy.setText(" Syntax Error")
-            self.btn_run_hyphy.setIcon(qta.icon("mdi.alert", color="#FF3B30"))
+            self.btn_run_hyphy.set_state("error", " Syntax Error", "mdi.alert")
             self.btn_run_hyphy.setToolTip(f"Error: {errors[0]}")
-            self.btn_run_hyphy.setStyleSheet("""
-                QPushButton { background-color: #FFECEB; color: #FF3B30; font-size: 12px; font-weight: bold; border-radius: 6px; padding: 0 16px; border: 1px solid #FF3B30; }
-            """)
             self.btn_export_zip.setEnabled(False)
             self.btn_run_hyphy.setEnabled(False)
             if self.was_valid and self.job_queue:
                 self.trigger_shake_animation()
                 self.was_valid = False
         else:
-            self.btn_run_hyphy.setText(" Run HyPhy Execution")
-            self.btn_run_hyphy.setIcon(qta.icon("mdi.play", color="white"))
+            self.btn_run_hyphy.set_state("run", " Run HyPhy Execution", "mdi.play")
             self.btn_run_hyphy.setToolTip("")
-            self.btn_run_hyphy.setStyleSheet("""
-                QPushButton { background-color: #1D1D1F; color: white; font-size: 12px; font-weight: bold; border-radius: 6px; padding: 0 16px; border: none; }
-                QPushButton:hover { background-color: #333333; }
-                QPushButton:disabled { background-color: #E5E5EA; color: #8E8E93; }
-            """)
             self.btn_export_zip.setEnabled(True)
             self.btn_run_hyphy.setEnabled(True)
             self.was_valid = True
@@ -930,9 +856,22 @@ class Tab3HyPhyUI(QWidget):
             )
             return
 
+        exec_root = common_utils.get_pipeline_path(
+            t1_st1_logic.CURRENT_PROJECT_PATH, "Results", "JSON"
+        )
+        if not exec_root:
+            self.log_msg.emit(
+                "[ERROR] No workspace selected.\nSolution: Please set a project workspace in the Dashboard first."
+            )
+            return
+
         threads = int(self.combo_cpu.currentText())
+        min_cpu = int(self.combo_min_cpu.currentText())
         batches, allocations = t3_hyphy_logic.prep_parallel_tasks(
-            self.job_queue, threads, self.chk_triplicate.isChecked()
+            self.job_queue,
+            threads,
+            self.chk_triplicate.isChecked(),
+            min_cores=min_cpu,
         )
 
         row = 0
@@ -965,7 +904,7 @@ class Tab3HyPhyUI(QWidget):
                 row += 1
 
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        work_dir = Path.cwd() / "Results" / "HyPhy_Execution" / f"Run_{timestamp}"
+        work_dir = exec_root / f"Run_{timestamp}"
         work_dir.mkdir(parents=True, exist_ok=True)
 
         for job in self.job_queue:
@@ -1007,9 +946,6 @@ class Tab3HyPhyUI(QWidget):
             )
 
             self.btn_run_hyphy.setEnabled(False)
-            self.btn_run_hyphy.setStyleSheet("""
-                QPushButton { background-color: #E5E5EA; color: #8E8E93; font-size: 12px; font-weight: bold; border-radius: 6px; padding: 0 16px; border: none; }
-            """)
             self.spinner_idx = 0
             self.spinner_timer.start(100)
             self.btn_abort.setEnabled(True)
@@ -1154,42 +1090,7 @@ class Tab3HyPhyUI(QWidget):
             self.progress_update.emit("Batch Execution", 100, "Completed")
             self.log_msg.emit("[SUCCESS] HyPhy Analysis Completed successfully!")
             if hasattr(self, "current_work_dir"):
-                try:
-                    if sys.platform == "win32":
-                        os.startfile(self.current_work_dir)
-                    elif sys.platform == "darwin":
-                        subprocess.call(
-                            ["open", self.current_work_dir],
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                        )
-                    else:
-                        try:
-                            res = subprocess.call(
-                                ["explorer.exe", self.current_work_dir],
-                                stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL,
-                            )
-                            if res != 0:
-                                raise OSError()
-                        except Exception:
-                            res2 = subprocess.call(
-                                ["xdg-open", self.current_work_dir],
-                                stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL,
-                            )
-                            if res2 != 0:
-                                raise OSError()
-                except Exception:
-                    self.log_msg.emit(
-                        "[INFO] Analysis completed successfully and all results are safely saved."
-                    )
-                    self.log_msg.emit(
-                        "[INFO] Unable to automatically visualize the output folder due to missing GUI display components in the current environment."
-                    )
-                    self.log_msg.emit(
-                        f"[INFO] Please manually navigate to: {self.current_work_dir}"
-                    )
+                self.log_msg.emit(f"[INFO] Results saved to: {self.current_work_dir}")
 
             if t1_st1_logic.CURRENT_PROJECT_PATH:
                 try:
@@ -1275,7 +1176,7 @@ class Tab3HyPhyUI(QWidget):
                     self.log_msg.emit(f"[ERROR] Failed to save crash log: {str(e)}")
 
     def export_zip(self):
-        save_path, _ = QFileDialog.getSaveFileName(
+        save_path = pick_save(
             self, "Save Export Package", "HyPhy_Job.zip", "ZIP Files (*.zip)"
         )
         if save_path:
