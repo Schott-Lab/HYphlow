@@ -1,7 +1,11 @@
 import re
+import threading
 from pathlib import Path
 from collections import Counter
 from datetime import datetime
+from hyphlow import organism_names
+
+_NAME_LOCK = threading.Lock()
 
 
 def get_pipeline_path(project_path, category="Results", file_type="CSV"):
@@ -29,62 +33,81 @@ def get_pipeline_path(project_path, category="Results", file_type="CSV"):
     return path
 
 
+IGNORE_WORDS = {
+    "FMT",
+    "FAS",
+    "FASTA",
+    "NWK",
+    "TREE",
+    "TRE",
+    "ALIGN",
+    "ALN",
+    "OUTPUT",
+    "REC",
+    "PRN",
+    "PR",
+    "MASTER",
+    "CSV",
+    "UNKNOWN",
+    "PREDICTED",
+    "ISOLATE",
+    "SEQ",
+    "CDS",
+    "FA",
+    "V1",
+    "V2",
+}
+NCBI_PREFIXES = {"XM", "NM", "NP", "XP", "NC", "NG", "XR", "NR"}
+
+
+GENE_LIKE = re.compile(r"^[A-Z][A-Z0-9]{1,9}$")
+SEQUENCE_LIKE = re.compile(r"^[ACGTUN]{6,}$")
+ACCESSION_LIKE = re.compile(r"^[A-Z]{1,2}\d{4,}$")
+
+
+def _is_gene_like(token):
+    if not GENE_LIKE.match(token):
+        return False
+    if token in IGNORE_WORDS or token[:2] in NCBI_PREFIXES:
+        return False
+    if ACCESSION_LIKE.match(token):
+        return False
+    if SEQUENCE_LIKE.match(token):
+        return False
+    if organism_names.looks_like_organism(token):
+        return False
+    return True
+
+
 def detect_gene_from_file(file_path):
 
-    candidates = []
-    ignore_words = {
-        "FMT",
-        "FAS",
-        "FASTA",
-        "NWK",
-        "TREE",
-        "ALIGN",
-        "OUTPUT",
-        "REC",
-        "PR",
-        "MASTER",
-        "CSV",
-        "UNKNOWN",
-        "PREDICTED",
-        "ISOLATE",
-    }
-    ncbi_prefixes = {"XM", "NM", "NP", "XP", "NC", "NG", "XR", "NR"}
+    stem = Path(file_path).stem
+    for token in re.split(r"[^A-Za-z0-9]+", stem):
+        if _is_gene_like(token):
+            return token
 
     try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            content = f.read(4096)
-
-        tokens = re.split(r"[^a-zA-Z0-9]", content)
-        for token in tokens:
-            t_upper = token.upper()
-            if (
-                3 <= len(t_upper) <= 10
-                and not token.isdigit()
-                and t_upper not in ignore_words
-            ):
-                if t_upper[:2] not in ncbi_prefixes:
-                    if re.match(r"^[A-Z][A-Z0-9]{2,}$", t_upper):
-                        candidates.append(t_upper)
-
-        if candidates:
-            most_common = Counter(candidates).most_common(1)
-            return most_common[0][0]
-    except Exception:
+        with open(file_path, "r", encoding="utf-8", errors="replace") as fh:
+            lines = fh.read(8192).splitlines()
+        if any(l.startswith(">") for l in lines):
+            text = " ".join(l for l in lines if l.startswith(">"))
+        else:
+            text = " ".join(lines)
+        hits = [t for t in re.split(r"[^A-Za-z0-9]+", text) if _is_gene_like(t)]
+        if hits:
+            token, count = Counter(hits).most_common(1)[0]
+            if count >= 2:
+                return token
+    except OSError:
         pass
 
-    name = Path(file_path).name.upper()
-    tokens = re.split(r"[^A-Z0-9]", name)
-    for t in tokens:
-        if (
-            3 <= len(t) <= 10
-            and not t.isdigit()
-            and t not in ignore_words
-            and t[:2] not in ncbi_prefixes
-        ):
-            if re.match(r"^[A-Z][A-Z0-9]{2,}$", t):
-                return t
+    return ""
 
-    return "UNKNOWN"
+
+def make_base_name(organism, gene):
+
+    parts = [p.strip() for p in (organism, gene) if p and p.strip()]
+    return "_".join(parts) if parts else "UNKNOWN"
 
 
 def generate_smart_filename(base_name, file_type, out_dir, ext, is_report=False):
@@ -94,8 +117,9 @@ def generate_smart_filename(base_name, file_type, out_dir, ext, is_report=False)
     mmdd = datetime.now().strftime("%m%d")
 
     ft_upper = file_type.upper()
-
-    if "REC" in ft_upper:
+    if "PRN" in ft_upper:
+        middle_tag = "_prn"
+    elif "REC" in ft_upper:
         if any(x in ft_upper for x in ["FAS", "FASTA", "FA"]):
             middle_tag = "_aln_rec"
         elif any(x in ft_upper for x in ["NWK", "TREE", "TRE"]):
@@ -114,14 +138,16 @@ def generate_smart_filename(base_name, file_type, out_dir, ext, is_report=False)
 
     prefix = "Rpt_" if is_report else ""
 
-    v = 1
-    while True:
-        new_name = f"{prefix}{base_name}{middle_tag}_v{v}_{mmdd}{ext}"
-        full_path = out_path / new_name
-
-        if not full_path.exists():
-            return str(full_path), v
-        v += 1
+    with _NAME_LOCK:
+        v = 1
+        while True:
+            new_name = f"{prefix}{base_name}{middle_tag}_v{v}_{mmdd}{ext}"
+            full_path = out_path / new_name
+            try:
+                full_path.touch(exist_ok=False)
+                return str(full_path), v
+            except FileExistsError:
+                v += 1
 
 
 def log_error_to_file(project_path, tab_name, error_msg):
