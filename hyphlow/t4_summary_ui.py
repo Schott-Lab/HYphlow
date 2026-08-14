@@ -1,14 +1,9 @@
-import os
-import sys
 import json
-import subprocess
-import datetime
 from pathlib import Path
 from PyQt5.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
-    QPushButton,
     QFrame,
     QLabel,
     QTableWidget,
@@ -19,9 +14,8 @@ from PyQt5.QtWidgets import (
     QLineEdit,
 )
 from PyQt5.QtCore import Qt, pyqtSignal
-import qtawesome as qta
 
-from hyphlow.common_ui import UnifiedDropZone, PrimaryButton
+from hyphlow.common_ui import UnifiedDropZone, PrimaryButton, open_path
 from hyphlow import common_utils
 from hyphlow import t1_st1_logic
 from hyphlow import t4_summary_logic
@@ -144,15 +138,7 @@ class Tab4SummaryUI(QWidget):
         """)
         btn_layout.addWidget(self.input_custom_name)
 
-        self.btn_export = QPushButton(" Export to Excel")
-        self.btn_export.setIcon(qta.icon("mdi.file-excel", color="#FFFFFF"))
-        self.btn_export.setFixedHeight(44)
-        self.btn_export.setCursor(Qt.PointingHandCursor)
-        self.btn_export.setStyleSheet("""
-            QPushButton { background-color: #1D1D1F; color: white; border-radius: 8px; border: none; padding: 0 20px;}
-            QPushButton:hover { background-color: #333333; }
-            QPushButton:disabled { background-color: #E5E5EA; color: #8E8E93; }
-        """)
+        self.btn_export = PrimaryButton(" Export to Excel", "mdi.file-excel")
         self.btn_export.setEnabled(False)
         self.btn_export.clicked.connect(self.export_to_excel)
         btn_layout.addWidget(self.btn_export)
@@ -281,7 +267,7 @@ class Tab4SummaryUI(QWidget):
         c_name = self.input_custom_name.text().strip()
 
         self.btn_export.setEnabled(False)
-        self.btn_export.setText(" Processing...")
+        self.btn_export.set_state("busy", " Processing...")
 
         for lbl in self.file_status_labels.values():
             lbl.setText("Processing")
@@ -301,7 +287,7 @@ class Tab4SummaryUI(QWidget):
 
     def on_export_finished(self, res):
         self.btn_export.setEnabled(True)
-        self.btn_export.setText(" Export to Excel")
+        self.btn_export.set_state("run", " Export to Excel", "mdi.file-excel")
 
         errors = res.get("errors", [])
         status = res.get("status")
@@ -359,35 +345,7 @@ class Tab4SummaryUI(QWidget):
                 self.log_msg.emit(
                     f"[SUCCESS] Excel report exported to: {target_folder}"
                 )
-                try:
-                    if sys.platform == "win32":
-                        os.startfile(target_folder)
-                    elif sys.platform == "darwin":
-                        subprocess.call(
-                            ["open", target_folder],
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                        )
-                    else:
-                        try:
-                            r = subprocess.call(
-                                ["explorer.exe", target_folder],
-                                stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL,
-                            )
-                            if r != 0:
-                                raise OSError()
-                        except Exception:
-                            r2 = subprocess.call(
-                                ["xdg-open", target_folder],
-                                stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL,
-                            )
-                            if r2 != 0:
-                                raise OSError()
-                except Exception:
-                    self.log_msg.emit("[INFO] Excel report saved successfully.")
-                    self.log_msg.emit(f"[INFO] Please manually open: {target_folder}")
+
         else:
             solution = get_solution(main_type)
             console_msg = f"Failed to export Excel | [{main_type}] {main_msg}\n{solution}\nTraceback:\n{main_tb}"
@@ -420,10 +378,3 @@ class Tab4SummaryUI(QWidget):
     def on_viz_finished(self, out_dir):
         self.log_msg.emit(f"[SUCCESS] SVGs and Source Data saved to: {out_dir}")
         self.btn_viz.setEnabled(True)
-        try:
-            if sys.platform == "win32":
-                os.startfile(out_dir)
-            elif sys.platform == "darwin":
-                subprocess.call(["open", out_dir])
-        except Exception:
-            pass
