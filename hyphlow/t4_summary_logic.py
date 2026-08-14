@@ -1,17 +1,52 @@
-import os
 import re
 import json
 import datetime
 import traceback
 from pathlib import Path
 import pandas as pd
-import xlsxwriter
 import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import seaborn as sns
 from PyQt5.QtCore import QThread, pyqtSignal
+from PyQt5.QtCore import QThread, pyqtSignal
+
+from hyphlow import common_utils
+from hyphlow.t2_tagging_logic import STEP_NAMES
+
+
+def _identity_from_json_name(json_name):
+    """Recover (organism, gene, tag) from a HyPhy result filename.
+
+    Names look like ORGANISM_GENE_annotated_TAG_Strict_Consensus_v1_0801_MODEL.
+    The tag may itself contain underscores, so it is read as everything between
+    _annotated_ and the consensus-step marker rather than as a single token.
+    """
+    stem = Path(json_name).stem
+
+    tag = "UNPARSED"
+    m = re.search(r"_annotated_(.+?)_(?:%s)" % "|".join(STEP_NAMES), stem)
+    if m:
+        tag = m.group(1)
+        head = stem[: m.start()]
+    else:
+        head = re.split(r"_annotated_", stem)[0]
+
+    # head is ORGANISM_GENE. The gene is the uppercase token; whatever comes
+    # before it is the organism.
+    tokens = [t for t in head.split("_") if t]
+    gene, organism = "", ""
+    for i, t in enumerate(tokens):
+        if common_utils._is_gene_like(t):
+            gene = t.upper()
+            organism = "_".join(tokens[:i])
+            break
+    if not gene and tokens:
+        gene = tokens[-1].upper()
+        organism = "_".join(tokens[:-1])
+
+    return organism, gene, tag
 
 
 class SummaryExportThread(QThread):
@@ -141,14 +176,9 @@ class SummaryExportThread(QThread):
 
                     model_info = data.get("analysis", {}).get("info", "")
                     base_name = Path(file_path).name
-                    gene_name = (
-                        base_name.split("_")[0]
-                        if "_" in base_name
-                        else base_name.split(".")[0]
+                    organism_name, gene_name, fg_tag = _identity_from_json_name(
+                        base_name
                     )
-
-                    fg_match = re.search(r"annotated_([A-Za-z0-9]+)", base_name)
-                    fg_tag = fg_match.group(1) if fg_match else "Entire Branch"
 
                     detected_model = "Unknown"
                     known_models = [
@@ -191,6 +221,7 @@ class SummaryExportThread(QThread):
                     master_row = {
                         "Model": detected_model,
                         "File Name": base_name,
+                        "Organism": organism_name,
                         "Gene Name": gene_name,
                         "FG Tag": fg_tag,
                         "AIC_Run1": (
@@ -214,6 +245,7 @@ class SummaryExportThread(QThread):
 
                     common_data = {
                         "File Name": base_name,
+                        "Organism": organism_name,
                         "Gene Name": gene_name,
                         "FG Tag": fg_tag,
                         "Sequences": data.get("input", {}).get(
@@ -634,15 +666,19 @@ class VisualizationWorker(QThread):
             clean_custom = re.sub(r'[\\/*?:"<>|]', "", self.custom_name.strip())
             prefix = f"HYphlow_{clean_custom}_" if clean_custom else "HYphlow_"
             mmdd = datetime.datetime.now().strftime("%m%d")
-            
+
             src_path = self.output_dir / f"{prefix}plot_SourceData_{mmdd}.xlsx"
-            
+
             with pd.ExcelWriter(src_path, engine="xlsxwriter") as writer:
                 for df_master, df_busted, df_relax in dfs:
                     if not df_busted.empty:
-                        df_busted.to_excel(writer, sheet_name="BUSTED_Source", index=False)
+                        df_busted.to_excel(
+                            writer, sheet_name="BUSTED_Source", index=False
+                        )
                     if not df_relax.empty:
-                        df_relax.to_excel(writer, sheet_name="RELAX_Source", index=False)
+                        df_relax.to_excel(
+                            writer, sheet_name="RELAX_Source", index=False
+                        )
 
             self.finished_viz.emit(str(self.output_dir))
 
@@ -691,11 +727,16 @@ class VisualizationWorker(QThread):
             return
 
         plot_df = pd.DataFrame(plot_data).sort_values(by=["FG Tag", "Gene Name"])
-        color_map = {tag: self.palette[i % len(self.palette)] for i, tag in enumerate(sorted(list(fg_tags)))}
+        color_map = {
+            tag: self.palette[i % len(self.palette)]
+            for i, tag in enumerate(sorted(list(fg_tags)))
+        }
 
         sig_df = plot_df[plot_df["p-value"] < 0.05]
         if not sig_df.empty:
-            self._draw_dumbbell(sig_df, color_map, "BUSTED", "FG_Omega", "BG_Omega", "ω (dN/dS)")
+            self._draw_dumbbell(
+                sig_df, color_map, "BUSTED", "FG_Omega", "BG_Omega", "ω (dN/dS)"
+            )
 
         self._draw_factor_bars(plot_df, color_map, "BUSTED", "FG_Omega", "FG ω (dN/dS)")
 
@@ -712,7 +753,7 @@ class VisualizationWorker(QThread):
                 (sheet_df["Gene Name"] == gname)
                 & (sheet_df["Sub_Model"] == "RELAX alternative")
             ]
-            
+
             k_val = None
             for _, b_row in best_rows.iterrows():
                 k_val_raw = b_row.get("K_Value", "")
@@ -736,11 +777,21 @@ class VisualizationWorker(QThread):
             return
 
         plot_df = pd.DataFrame(plot_data).sort_values(by=["FG Tag", "Gene Name"])
-        color_map = {tag: self.palette[i % len(self.palette)] for i, tag in enumerate(sorted(list(fg_tags)))}
+        color_map = {
+            tag: self.palette[i % len(self.palette)]
+            for i, tag in enumerate(sorted(list(fg_tags)))
+        }
 
         sig_df = plot_df[plot_df["p-value"] < 0.05]
         if not sig_df.empty:
-            self._draw_dumbbell(sig_df, color_map, "RELAX", "K_Value", "Baseline", "K (Relaxation Parameter)")
+            self._draw_dumbbell(
+                sig_df,
+                color_map,
+                "RELAX",
+                "K_Value",
+                "Baseline",
+                "K (Relaxation Parameter)",
+            )
 
         self._draw_factor_bars(plot_df, color_map, "RELAX", "K_Value", "K Value")
 
@@ -799,18 +850,35 @@ class VisualizationWorker(QThread):
 
         legend_handles = [
             mlines.Line2D(
-                [], [], color="black", marker="o", linestyle="None",
-                markerfacecolor="none", markersize=10, label="Background / Reference"
+                [],
+                [],
+                color="black",
+                marker="o",
+                linestyle="None",
+                markerfacecolor="none",
+                markersize=10,
+                label="Background / Reference",
             ),
             mlines.Line2D(
-                [], [], color="black", marker="o", linestyle="None",
-                markersize=10, label="Foreground / Test"
+                [],
+                [],
+                color="black",
+                marker="o",
+                linestyle="None",
+                markersize=10,
+                label="Foreground / Test",
             ),
         ]
         for tag, c in color_map.items():
             legend_handles.append(
                 mlines.Line2D(
-                    [], [], color=c, marker="s", linestyle="None", markersize=10, label=tag
+                    [],
+                    [],
+                    color=c,
+                    marker="s",
+                    linestyle="None",
+                    markersize=10,
+                    label=tag,
                 )
             )
 
@@ -863,6 +931,8 @@ class VisualizationWorker(QThread):
             sns.despine()
 
             clean_tag = "".join(x for x in tag if x.isalnum() or x in "_")
-            fig2_path = self._generate_plot_path(model_name, "plot_across_gene", clean_tag)
+            fig2_path = self._generate_plot_path(
+                model_name, "plot_across_gene", clean_tag
+            )
             plt.savefig(fig2_path, format="svg", bbox_inches="tight")
             plt.close()
