@@ -12,22 +12,19 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QSizePolicy,
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
+from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QColor
 import qtawesome as qta
 
 from hyphlow.common_ui import (
-    Popup,
     UnifiedDropZone,
     StandardTable,
     TableCheckBoxWidget,
     PrimaryButton,
-    ActionButton,
 )
 
 from hyphlow import t1_st1_logic
 from hyphlow import t1_st2_logic
-from hyphlow import t1_st3_logic
 
 
 class ValidationThread(QThread):
@@ -70,10 +67,11 @@ class FastaFormatThread(QThread):
     finished = pyqtSignal(list, str, int)
     progress = pyqtSignal(int, int)
 
-    def __init__(self, file_paths, gene_dict):
+    def __init__(self, file_paths, gene_dict, identity_dict=None):
         super().__init__()
         self.file_paths = file_paths
         self.gene_dict = gene_dict
+        self.identity_dict = identity_dict or {}
         self.is_cancelled = False
 
     def cancel(self):
@@ -89,7 +87,7 @@ class FastaFormatThread(QThread):
             if self.is_cancelled:
                 return
             results, rep_path = t1_st2_logic.run_fasta_pipeline(
-                self.file_paths, self.gene_dict
+                self.file_paths, self.gene_dict, self.identity_dict
             )
             if not self.is_cancelled:
                 self.finished.emit(results, str(rep_path), 0)
@@ -101,10 +99,11 @@ class NwkFormatThread(QThread):
     finished = pyqtSignal(list, str, int)
     progress = pyqtSignal(int, int)
 
-    def __init__(self, file_paths, gene_dict):
+    def __init__(self, file_paths, gene_dict, identity_dict=None):
         super().__init__()
         self.file_paths = file_paths
         self.gene_dict = gene_dict
+        self.identity_dict = identity_dict or {}
         self.is_cancelled = False
 
     def cancel(self):
@@ -119,8 +118,8 @@ class NwkFormatThread(QThread):
         try:
             if self.is_cancelled:
                 return
-            results, rep_path = t1_st3_logic.run_nwk_pipeline(
-                self.file_paths, self.gene_dict
+            results, rep_path = t1_st2_logic.run_nwk_pipeline(
+                self.file_paths, self.gene_dict, self.identity_dict
             )
             if not self.is_cancelled:
                 self.finished.emit(results, str(rep_path), 0)
@@ -328,7 +327,6 @@ class StandardizationPage(QWidget):
         self.btn_toggle_csv.setStyleSheet("border: none; background: transparent;")
         self.btn_toggle_csv.setCursor(Qt.PointingHandCursor)
         csv_header.addWidget(self.btn_toggle_csv)
-        csv_card_layout.addLayout(csv_header)
 
         self.csv_content_area = QFrame()
         self.csv_content_area.setStyleSheet("background: transparent; border: none;")
@@ -339,6 +337,13 @@ class StandardizationPage(QWidget):
 
         self.btn_toggle_csv.clicked.connect(
             lambda: self.toggle_card(self.csv_content_area, self.btn_toggle_csv)
+        )
+
+        csv_card_layout.insertWidget(
+            0,
+            self._make_clickable_header(
+                csv_header, self.csv_content_area, self.btn_toggle_csv
+            ),
         )
 
         main_layout.addWidget(self.card_csv)
@@ -372,7 +377,6 @@ class StandardizationPage(QWidget):
         self.btn_toggle_fmt.setStyleSheet("border: none; background: transparent;")
         self.btn_toggle_fmt.setCursor(Qt.PointingHandCursor)
         fmt_header.addWidget(self.btn_toggle_fmt)
-        fmt_card_layout.addLayout(fmt_header)
 
         self.fmt_content_area = QFrame()
         self.fmt_content_area.setStyleSheet("background: transparent; border: none;")
@@ -384,6 +388,13 @@ class StandardizationPage(QWidget):
 
         self.btn_toggle_fmt.clicked.connect(
             lambda: self.toggle_card(self.fmt_content_area, self.btn_toggle_fmt)
+        )
+
+        fmt_card_layout.insertWidget(
+            0,
+            self._make_clickable_header(
+                fmt_header, self.fmt_content_area, self.btn_toggle_fmt
+            ),
         )
 
         main_layout.addWidget(self.card_format)
@@ -399,6 +410,20 @@ class StandardizationPage(QWidget):
         else:
             content_area.show()
             toggle_btn.setIcon(qta.icon("mdi.chevron-up", color="#1D1D1F"))
+
+    def _make_clickable_header(self, header_layout, content_area, toggle_btn):
+
+        frame = QFrame()
+        frame.setStyleSheet(
+            "QFrame { background: transparent; border: none; border-radius: 8px; }"
+            "QFrame:hover { background-color: #FAFAFA; }"
+        )
+        frame.setCursor(Qt.PointingHandCursor)
+        wrap = QVBoxLayout(frame)
+        wrap.setContentsMargins(4, 4, 4, 4)
+        wrap.addLayout(header_layout)
+        frame.mousePressEvent = lambda e: self.toggle_card(content_area, toggle_btn)
+        return frame
 
     def _build_csv_ui(self, layout):
         self.csv_drop_zone = UnifiedDropZone(
@@ -431,7 +456,7 @@ class StandardizationPage(QWidget):
         self.csv_pbar.hide()
         layout.addWidget(self.csv_pbar)
 
-        self.csv_run_btn = ActionButton(" Run Validation", "mdi.play", is_danger=False)
+        self.csv_run_btn = PrimaryButton(" Run Validation", "mdi.play")
         self.is_csv_running = False
         self.csv_run_btn.clicked.connect(self.toggle_csv_validation)
         layout.addWidget(self.csv_run_btn)
@@ -502,9 +527,7 @@ class StandardizationPage(QWidget):
         self.fasta_pbar.hide()
         fasta_vbox.addWidget(self.fasta_pbar)
 
-        self.fasta_run_btn = ActionButton(
-            " Run FASTA Formatting", "mdi.play", is_danger=False
-        )
+        self.fasta_run_btn = PrimaryButton(" Run FASTA Formatting", "mdi.play")
         self.is_fasta_running = False
         self.fasta_run_btn.clicked.connect(self.toggle_fasta_formatting)
         fasta_vbox.addWidget(self.fasta_run_btn)
@@ -538,9 +561,7 @@ class StandardizationPage(QWidget):
         self.nwk_pbar.hide()
         nwk_vbox.addWidget(self.nwk_pbar)
 
-        self.nwk_run_btn = ActionButton(
-            " Run NWK Formatting", "mdi.play", is_danger=False
-        )
+        self.nwk_run_btn = PrimaryButton(" Run NWK Formatting", "mdi.play")
         self.is_nwk_running = False
         self.nwk_run_btn.clicked.connect(self.toggle_nwk_formatting)
         nwk_vbox.addWidget(self.nwk_run_btn)
@@ -575,21 +596,18 @@ class StandardizationPage(QWidget):
                 headers = t1_st1_logic.load_csv_headers(fname)
                 widget.set_headers(headers)
 
-    def set_csv_run_state(self, state):
+    @staticmethod
+    def _apply_run_state(btn, state, run_text):
         if state == "run":
-            self.csv_run_btn.setText(" Run Validation")
-            self.csv_run_btn.setIcon(qta.icon("mdi.play", color="white"))
-            self.csv_run_btn.setStyleSheet(
-                "QPushButton { background-color: #1D1D1F; color: white; font-size: 14px; font-weight: bold; border-radius: 8px; border: none; padding: 0 16px; } QPushButton:hover { background-color: #333333; }"
-            )
-            self.is_csv_running = False
+            btn.set_state("run", run_text, "mdi.play")
         else:
-            self.csv_run_btn.setText(" Stop / Abort")
-            self.csv_run_btn.setIcon(qta.icon("mdi.stop", color="white"))
-            self.csv_run_btn.setStyleSheet(
-                "QPushButton { background-color: #FF3B30; color: white; font-size: 14px; font-weight: bold; border-radius: 8px; border: none; padding: 0 16px; } QPushButton:hover { background-color: #D70015; }"
-            )
-            self.is_csv_running = True
+            btn.set_state("stop", " Stop / Abort", "mdi.stop")
+        return state != "run"
+
+    def set_csv_run_state(self, state):
+        self.is_csv_running = self._apply_run_state(
+            self.csv_run_btn, state, " Run Validation"
+        )
 
     def toggle_csv_validation(self):
         if not self.is_csv_running:
@@ -710,9 +728,7 @@ class StandardizationPage(QWidget):
             self.csv_notify_lbl.setText(
                 f"Saved for all files! ({total_applied} applied)"
             )
-            self.log_msg.emit(
-                f"[SUCCESS] Process completed and saved to Results folder."
-            )
+            self.log_msg.emit("[SUCCESS] Process completed and saved to Results folder.")
 
         except Exception as e:
             self.log_msg.emit(f"[ERROR] Error saving files: {str(e)}")
@@ -725,20 +741,9 @@ class StandardizationPage(QWidget):
         self.log_msg.emit(f"[INFO] Loaded {len(files)} FASTA file(s) for formatting.")
 
     def set_fasta_run_state(self, state):
-        if state == "run":
-            self.fasta_run_btn.setText(" Run FASTA Formatting")
-            self.fasta_run_btn.setIcon(qta.icon("mdi.play", color="white"))
-            self.fasta_run_btn.setStyleSheet(
-                "QPushButton { background-color: #1D1D1F; color: white; font-size: 14px; font-weight: bold; border-radius: 8px; border: none; padding: 0 16px; } QPushButton:hover { background-color: #333333; }"
-            )
-            self.is_fasta_running = False
-        else:
-            self.fasta_run_btn.setText(" Stop / Abort")
-            self.fasta_run_btn.setIcon(qta.icon("mdi.stop", color="white"))
-            self.fasta_run_btn.setStyleSheet(
-                "QPushButton { background-color: #FF3B30; color: white; font-size: 14px; font-weight: bold; border-radius: 8px; border: none; padding: 0 16px; } QPushButton:hover { background-color: #D70015; }"
-            )
-            self.is_fasta_running = True
+        self.is_fasta_running = self._apply_run_state(
+            self.fasta_run_btn, state, " Run FASTA Formatting"
+        )
 
     def toggle_fasta_formatting(self):
         if not self.is_fasta_running:
@@ -773,7 +778,10 @@ class StandardizationPage(QWidget):
         )
 
         gene_dict = self.fasta_drop.get_all_genes()
-        self.fasta_thread = FastaFormatThread(self.fasta_files, gene_dict)
+        identity_dict = self.fasta_drop.get_all_identities()
+        self.fasta_thread = FastaFormatThread(
+            self.fasta_files, gene_dict, identity_dict
+        )
         self.fasta_thread.progress.connect(self.update_fasta_progress)
         self.fasta_thread.finished.connect(self.on_fasta_finished)
         self.fasta_thread.start()
@@ -811,20 +819,9 @@ class StandardizationPage(QWidget):
         self.log_msg.emit(f"[INFO] Loaded {len(files)} NWK file(s) for formatting.")
 
     def set_nwk_run_state(self, state):
-        if state == "run":
-            self.nwk_run_btn.setText(" Run NWK Formatting")
-            self.nwk_run_btn.setIcon(qta.icon("mdi.play", color="white"))
-            self.nwk_run_btn.setStyleSheet(
-                "QPushButton { background-color: #1D1D1F; color: white; font-size: 14px; font-weight: bold; border-radius: 8px; border: none; padding: 0 16px; } QPushButton:hover { background-color: #333333; }"
-            )
-            self.is_nwk_running = False
-        else:
-            self.nwk_run_btn.setText(" Stop / Abort")
-            self.nwk_run_btn.setIcon(qta.icon("mdi.stop", color="white"))
-            self.nwk_run_btn.setStyleSheet(
-                "QPushButton { background-color: #FF3B30; color: white; font-size: 14px; font-weight: bold; border-radius: 8px; border: none; padding: 0 16px; } QPushButton:hover { background-color: #D70015; }"
-            )
-            self.is_nwk_running = True
+        self.is_nwk_running = self._apply_run_state(
+            self.nwk_run_btn, state, " Run NWK Formatting"
+        )
 
     def toggle_nwk_formatting(self):
         if not self.is_nwk_running:
@@ -857,7 +854,8 @@ class StandardizationPage(QWidget):
         )
 
         gene_dict = self.nwk_drop.get_all_genes()
-        self.nwk_thread = NwkFormatThread(self.nwk_files, gene_dict)
+        identity_dict = self.nwk_drop.get_all_identities()
+        self.nwk_thread = NwkFormatThread(self.nwk_files, gene_dict, identity_dict)
         self.nwk_thread.progress.connect(self.update_nwk_progress)
         self.nwk_thread.finished.connect(self.on_nwk_finished)
         self.nwk_thread.start()
