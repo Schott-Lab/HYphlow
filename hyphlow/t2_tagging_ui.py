@@ -1,7 +1,9 @@
 import os
-import pandas as pd
 import traceback
 from pathlib import Path
+
+import pandas as pd
+
 from PyQt5.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -11,108 +13,77 @@ from PyQt5.QtWidgets import (
     QLabel,
     QComboBox,
     QTextBrowser,
-    QFileDialog,
-    QGraphicsDropShadowEffect,
     QSizePolicy,
     QSplitter,
     QDialog,
     QDoubleSpinBox,
     QFormLayout,
-    QLayout,
     QCheckBox,
     QTableWidget,
     QTableWidgetItem,
     QHeaderView,
     QScrollArea,
-    QLineEdit,
+    QMessageBox,
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QRect, QSize, QPoint
-from PyQt5.QtGui import QColor, QPixmap, QFont
+from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PyQt5.QtGui import QPixmap
 import qtawesome as qta
-from hyphlow import t2_tagging_logic
-from hyphlow import common_utils
-from hyphlow import t1_st1_logic
+
+from hyphlow import common_utils, t1_st1_logic, t2_tagging_logic
 from hyphlow.common_ui import (
-    Popup,
     UnifiedDropZone,
     PrimaryButton,
+    FlowLayout,
+    FlowContainer,
+    open_path,
+    message_box,
 )
 
-class FlowLayout(QLayout):
-    def __init__(self, parent=None, margin=0, spacing=-1):
-        super().__init__(parent)
-        self.setContentsMargins(margin, margin, margin, margin)
-        self.setSpacing(spacing)
-        self.itemList = []
+# ================================================================= shared styles
 
-    def __del__(self):
-        item = self.takeAt(0)
-        while item:
-            item = self.takeAt(0)
+# Qt stylesheets are CSS, so their braces collide with f-strings and str.format.
+# Styles are therefore assembled by concatenation. Only the ones this file reuses
+# are named here; a colour or style that appears once stays where it is used,
+# since naming it would add a lookup without removing a decision.
+#
+# The colours are not shared with t2_tagging_logic, which defines its own for the
+# figures. A button and a branch are free to diverge, and one constant for both
+# would make that impossible to express.
 
-    def addItem(self, item):
-        self.itemList.append(item)
+COLOR_BORDER = "#D1D1D6"
+COLOR_FILL = "#F2F2F7"
+COLOR_INACTIVE = "#E5E5EA"
+COLOR_SURFACE = "#FFFFFF"
+COLOR_TEXT = "#1D1D1F"
+COLOR_TEXT_DISABLED = "#A2A2A6"
+COLOR_WARNING = "#FF3B30"
+COLOR_WARNING_FILL = "#FFECEB"
 
-    def count(self):
-        return len(self.itemList)
+# An icon button that should read as a bare glyph. Twelve call sites.
+STYLE_FLAT = "border: none; background: transparent;"
+STYLE_TRANSPARENT = "background-color: transparent;"
 
-    def itemAt(self, index):
-        return self.itemList[index] if 0 <= index < len(self.itemList) else None
+# A small bordered button, used across the viewer toolbar.
+STYLE_SMALL_BUTTON = (
+    "QPushButton { background-color: "
+    + COLOR_SURFACE
+    + "; color: "
+    + COLOR_TEXT
+    + "; font-weight: bold; font-size: 11px; border-radius: 6px; "
+    "border: 1px solid " + COLOR_BORDER + "; padding: 6px 10px; } "
+    "QPushButton:hover { background-color: " + COLOR_FILL + "; } "
+    "QPushButton:disabled { color: "
+    + COLOR_TEXT_DISABLED
+    + "; border-color: "
+    + COLOR_INACTIVE
+    + "; }"
+)
 
-    def takeAt(self, index):
-        return self.itemList.pop(index) if 0 <= index < len(self.itemList) else None
-
-    def expandingDirections(self):
-        return Qt.Orientations(0)
-
-    def hasHeightForWidth(self):
-        return True
-
-    def heightForWidth(self, width):
-        return self.doLayout(QRect(0, 0, width, 0), True)
-
-    def setGeometry(self, rect):
-        super().setGeometry(rect)
-        self.doLayout(rect, False)
-
-    def sizeHint(self):
-        return self.minimumSize()
-
-    def minimumSize(self):
-        size = QSize()
-        for item in self.itemList:
-            if item is not None and item.widget() is not None:
-                size = size.expandedTo(item.minimumSize())
-        margins = self.contentsMargins()
-        size += QSize(
-            margins.left() + margins.right(), margins.top() + margins.bottom()
-        )
-        return size
-
-    def doLayout(self, rect, testOnly):
-        x, y, lineHeight = rect.x(), rect.y(), 0
-        spacing = self.spacing()
-        for item in self.itemList:
-            if item is None or item.widget() is None:
-                continue
-            nextX = x + item.sizeHint().width() + spacing
-            if nextX - spacing > rect.right() and lineHeight > 0:
-                x, y = rect.x(), y + lineHeight + spacing
-                nextX, lineHeight = x + item.sizeHint().width() + spacing, 0
-            if not testOnly:
-                item.setGeometry(QRect(QPoint(x, y), item.sizeHint()))
-            x = nextX
-            lineHeight = max(lineHeight, item.sizeHint().height())
-        return y + lineHeight - rect.y()
-
-
-class FlowContainer(QWidget):
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        if self.layout():
-            h = self.layout().heightForWidth(self.width())
-            if self.minimumHeight() != h:
-                self.setMinimumHeight(h)
+# The pill that reports a failed step.
+STYLE_ERROR_PILL = (
+    "background-color: " + COLOR_WARNING_FILL + "; color: " + COLOR_WARNING + "; "
+    "border-radius: 6px; font-weight: 800; font-size: 11px; padding: 4px 8px;"
+)
 
 
 class ClickableLabel(QLabel):
@@ -142,7 +113,11 @@ class ImagePopupDialog(QDialog):
         self.btn_prev = QPushButton(" Prev Step")
         self.btn_prev.setIcon(qta.icon("mdi.chevron-left", color="#1D1D1F"))
         self.btn_prev.setStyleSheet(
-            "QPushButton { background-color: #E5E5EA; font-weight: bold; font-size: 13px; color: #1D1D1F; padding: 10px 20px; border-radius: 8px; border: none; } QPushButton:disabled { color: #A2A2A6; }"
+            "QPushButton { "
+            "background-color: #E5E5EA; font-weight: bold; font-size: 13px; "
+            "color: #1D1D1F; padding: 10px 20px; border-radius: 8px; border: none; "
+            "} "
+            "QPushButton:disabled { color: #A2A2A6; }"
         )
         self.btn_prev.clicked.connect(lambda: self.change_step(-1))
 
@@ -156,7 +131,11 @@ class ImagePopupDialog(QDialog):
         self.btn_next.setIcon(qta.icon("mdi.chevron-right", color="#1D1D1F"))
         self.btn_next.setLayoutDirection(Qt.RightToLeft)
         self.btn_next.setStyleSheet(
-            "QPushButton { background-color: #E5E5EA; font-weight: bold; font-size: 13px; color: #1D1D1F; padding: 10px 20px; border-radius: 8px; border: none; } QPushButton:disabled { color: #A2A2A6; }"
+            "QPushButton { "
+            "background-color: #E5E5EA; font-weight: bold; font-size: 13px; "
+            "color: #1D1D1F; padding: 10px 20px; border-radius: 8px; border: none; "
+            "} "
+            "QPushButton:disabled { color: #A2A2A6; }"
         )
         self.btn_next.clicked.connect(lambda: self.change_step(1))
 
@@ -174,13 +153,11 @@ class ImagePopupDialog(QDialog):
 
     def update_ui(self):
         self.btn_prev.setEnabled(self.current_step > 0)
-        self.btn_next.setEnabled(self.current_step < 4)
+        self.btn_next.setEnabled(self.current_step < t2_tagging_logic.N_STEPS - 1)
         labels = [
             "Step 1: Fitch",
-            "Step 2: Sankoff",
-            "Step 3: ML",
-            "Step 4: Two-Way Agreements",
-            "Step 5: Strict Consensus",
+            "Step 2: ML",
+            "Step 3: Consensus",
         ]
         self.lbl_step.setText(labels[self.current_step])
         if self.frames and os.path.exists(self.frames[self.current_step]):
@@ -200,61 +177,59 @@ class AlgoSettingsDialog(QDialog):
     def __init__(self, parent=None, current_params=None):
         super().__init__(parent)
         self.setWindowTitle("Algorithm Parameters")
+        self.setMinimumWidth(420)
         self.setFixedSize(300, 200)
         self.setStyleSheet("""
             QDialog { background-color: #FFFFFF; }
             QLabel { color: #1D1D1F; border: none; background: transparent; }
-            QDoubleSpinBox { background-color: #FFFFFF; color: #1D1D1F; border: 1px solid #D1D1D6; border-radius: 4px; padding: 4px; }
+            QDoubleSpinBox {
+                background-color: #FFFFFF; color: #1D1D1F; border: 1px solid #D1D1D6;
+                border-radius: 4px; padding: 4px;
+            }
         """)
         self.params = (
             current_params
             if current_params
-            else {"sankoff_gain": 2.0, "sankoff_loss": 1.0, "felsenstein_mu": 1.0}
+            else dict(t2_tagging_logic.DEFAULT_ALGO_PARAMS)
         )
         layout = QVBoxLayout(self)
         form_layout = QFormLayout()
         form_layout.setSpacing(15)
 
-        self.spin_gain = QDoubleSpinBox()
-        self.spin_gain.setRange(0.1, 10.0)
-        self.spin_gain.setSingleStep(0.5)
-        self.spin_gain.setValue(self.params["sankoff_gain"])
-        form_layout.addRow(
-            QLabel(
-                "Sankoff Gain Cost:", styleSheet="font-weight: 600; color: #515154;"
-            ),
-            self.spin_gain,
-        )
-
-        self.spin_loss = QDoubleSpinBox()
-        self.spin_loss.setRange(0.1, 10.0)
-        self.spin_loss.setSingleStep(0.5)
-        self.spin_loss.setValue(self.params["sankoff_loss"])
-        form_layout.addRow(
-            QLabel(
-                "Sankoff Loss Cost:", styleSheet="font-weight: 600; color: #515154;"
-            ),
-            self.spin_loss,
-        )
-
         self.spin_mu = QDoubleSpinBox()
-        self.spin_mu.setRange(0.1, 10.0)
+        self.spin_mu.setRange(0.1, 100.0)
         self.spin_mu.setSingleStep(0.1)
-        self.spin_mu.setValue(self.params["felsenstein_mu"])
+        cur = self.params["felsenstein_mu"]
+        is_auto = str(cur).lower() == "auto"
+        self.spin_mu.setValue(1.0 if is_auto else float(cur))
+        self.spin_mu.setEnabled(not is_auto)
+
+        self.chk_mu_auto = QCheckBox("Estimate from data (recommended)")
+        self.chk_mu_auto.setChecked(is_auto)
+        self.chk_mu_auto.toggled.connect(lambda on: self.spin_mu.setEnabled(not on))
+        self.chk_mu_auto.setStyleSheet(
+            "QCheckBox { background: transparent; padding: 0px; border: none; "
+            "color: #515154; font-weight: 600; font-size: 12px; }"
+            "QCheckBox::indicator { width: 16px; height: 16px; "
+            "border: 1px solid #C7C7CC; border-radius: 4px; background: white; }"
+            "QCheckBox::indicator:checked { background: #1D1D1F; "
+            "border: 1px solid #1D1D1F; }"
+        )
         form_layout.addRow(
-            QLabel(
-                "Felsenstein Mu (μ):", styleSheet="font-weight: 600; color: #515154;"
-            ),
+            QLabel("Felsenstein μ:", styleSheet="font-weight: 600; color: #515154;"),
             self.spin_mu,
         )
-
+        form_layout.addRow(QLabel(""), self.chk_mu_auto)
         layout.addLayout(form_layout)
-
         btn_layout = QHBoxLayout()
         save_btn = QPushButton(" Save Settings")
         save_btn.setIcon(qta.icon("mdi.check", color="white"))
         save_btn.setStyleSheet(
-            "QPushButton { background-color: #1D1D1F; color: white; padding: 8px 16px; border-radius: 8px; font-weight: bold; border: none; } QPushButton:hover { background-color: #333333; }"
+            "QPushButton { "
+            "background-color: #1D1D1F; color: white; padding: 8px 16px; "
+            "border-radius: 8px; font-weight: bold; border: none; "
+            "} "
+            "QPushButton:hover { background-color: #333333; }"
         )
         save_btn.clicked.connect(self.save_and_close)
         btn_layout.addStretch()
@@ -262,9 +237,9 @@ class AlgoSettingsDialog(QDialog):
         layout.addLayout(btn_layout)
 
     def save_and_close(self):
-        self.params["sankoff_gain"] = self.spin_gain.value()
-        self.params["sankoff_loss"] = self.spin_loss.value()
-        self.params["felsenstein_mu"] = self.spin_mu.value()
+        self.params["felsenstein_mu"] = (
+            "auto" if self.chk_mu_auto.isChecked() else self.spin_mu.value()
+        )
         self.accept()
 
 
@@ -315,9 +290,16 @@ class TraitRowWidget(QWidget):
         top_bar = QHBoxLayout()
         self.combo = QComboBox()
         self.combo.setStyleSheet("""
-            QComboBox { border: 1px solid #D1D1D6; border-radius: 6px; padding: 4px 10px; background: #FFFFFF; font-weight: 500; font-size: 13px; color: #1D1D1F; min-width: 150px; }
+            QComboBox {
+                border: 1px solid #D1D1D6; border-radius: 6px; padding: 4px 10px;
+                background: #FFFFFF; font-weight: 500; font-size: 13px; color: #1D1D1F;
+                min-width: 150px;
+            }
             QComboBox::drop-down { border: none; }
-            QComboBox QAbstractItemView { background: #FFFFFF; selection-background-color: #E5E5EA; selection-color: #1D1D1F; }
+            QComboBox QAbstractItemView {
+                background: #FFFFFF; selection-background-color: #E5E5EA;
+                selection-color: #1D1D1F;
+            }
         """)
         self.combo.addItems(t2_tagging_logic.get_csv_headers(self.csv_file))
         self.combo.currentIndexChanged.connect(self.load_pills)
@@ -328,7 +310,10 @@ class TraitRowWidget(QWidget):
         btn_del.setFixedSize(26, 26)
         btn_del.setCursor(Qt.PointingHandCursor)
         btn_del.setStyleSheet(
-            "QPushButton { border: none; background: transparent; border-radius: 13px; } QPushButton:hover { background: #FFECEB; }"
+            "QPushButton { "
+            "border: none; background: transparent; border-radius: 13px; "
+            "} "
+            "QPushButton:hover { background: #FFECEB; }"
         )
         btn_del.clicked.connect(lambda: self.delete_callback(self))
         top_bar.addWidget(btn_del)
@@ -354,9 +339,15 @@ class TraitRowWidget(QWidget):
         for val in vals:
             chk = QCheckBox(str(val))
             chk.setStyleSheet("""
-                QCheckBox { background: #F2F2F7; padding: 6px 14px; border-radius: 14px; color: #515154; font-weight: 600; font-size: 12px; border: 1px solid #E5E5EA; }
+                QCheckBox {
+                    background: #F2F2F7; padding: 6px 14px; border-radius: 14px;
+                    color: #515154; font-weight: 600; font-size: 12px;
+                    border: 1px solid #E5E5EA;
+                }
                 QCheckBox::indicator { width: 0px; height: 0px; }
-                QCheckBox:checked { background: #1D1D1F; color: #FFFFFF; border: 1px solid #1D1D1F; }
+                QCheckBox:checked {
+                    background: #1D1D1F; color: #FFFFFF; border: 1px solid #1D1D1F;
+                }
                 QCheckBox:hover:!checked { background: #E5E5EA; }
             """)
             chk.toggled.connect(lambda _, c=chk: self.change_callback())
@@ -381,13 +372,12 @@ class Tab2TaggingUI(QWidget):
         super().__init__()
         self.csv_file = None
         self.nwk_files = []
-        self.algo_params = {
-            "sankoff_gain": 2.0,
-            "sankoff_loss": 1.0,
-            "felsenstein_mu": 1.0,
-        }
+        # Read from the logic module rather than restated here. The two had
+        # already drifted: n_simulations was 1000 in this copy and 5000 there,
+        # so every GUI run used the value the stability test rejected.
+        self.algo_params = dict(t2_tagging_logic.DEFAULT_ALGO_PARAMS)
         self.batch_results = {}
-        self.current_step = 4
+        self.current_step = t2_tagging_logic.N_STEPS - 1
         self.trait_rows = []
         self.current_batch_labels = {}
         self._setup_ui()
@@ -395,7 +385,7 @@ class Tab2TaggingUI(QWidget):
     def _setup_ui(self):
         master_layout = QVBoxLayout(self)
         master_layout.setContentsMargins(0, 0, 0, 0)
-        self.setStyleSheet("background-color: transparent;")
+        self.setStyleSheet(STYLE_TRANSPARENT)
 
         self.global_scroll = QScrollArea()
         self.global_scroll.setWidgetResizable(True)
@@ -404,7 +394,7 @@ class Tab2TaggingUI(QWidget):
         )
 
         scroll_content = QWidget()
-        scroll_content.setStyleSheet("background-color: transparent;")
+        scroll_content.setStyleSheet(STYLE_TRANSPARENT)
         main_layout = QVBoxLayout(scroll_content)
         main_layout.setContentsMargins(40, 30, 40, 30)
         main_layout.setSpacing(20)
@@ -413,21 +403,25 @@ class Tab2TaggingUI(QWidget):
         header_vbox.setSpacing(4)
         header_lbl = QLabel("Tree Annotation")
         header_lbl.setObjectName("SectionHeader")
-        header_lbl.setStyleSheet("border: none; background: transparent;")
+        header_lbl.setStyleSheet(STYLE_FLAT)
         header_vbox.addWidget(header_lbl)
 
         desc_lbl = QLabel(
-            "Performs automatic foreground branch annotation by identifying consensus internal branches using CSV trait data."
+            "Performs automatic foreground branch annotation by identifying\n"
+            "consensus internal branches using CSV trait data."
         )
         desc_lbl.setObjectName("SubText")
-        desc_lbl.setStyleSheet("border: none; background: transparent;")
+        desc_lbl.setStyleSheet(STYLE_FLAT)
         header_vbox.addWidget(desc_lbl)
         main_layout.addLayout(header_vbox)
 
         self.input_card = QFrame()
         self.input_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         self.input_card.setStyleSheet(
-            "QFrame { background-color: #FFFFFF; border: 1px solid #E5E5EA; border-radius: 10px; }"
+            "QFrame { "
+            "background-color: #FFFFFF; border: 1px solid #E5E5EA; "
+            "border-radius: 10px; "
+            "}"
         )
         ic_layout = QVBoxLayout(self.input_card)
         ic_layout.setContentsMargins(15, 10, 15, 15)
@@ -436,13 +430,13 @@ class Tab2TaggingUI(QWidget):
         input_header = QHBoxLayout()
         lbl_input_title = QLabel("Data Input")
         lbl_input_title.setObjectName("SubHeader")
-        lbl_input_title.setStyleSheet("border: none; background: transparent;")
+        lbl_input_title.setStyleSheet(STYLE_FLAT)
         input_header.addWidget(lbl_input_title)
 
         input_header.addStretch()
         self.btn_toggle_input = QPushButton()
         self.btn_toggle_input.setIcon(qta.icon("mdi.chevron-up", color="#1D1D1F"))
-        self.btn_toggle_input.setStyleSheet("border: none; background: transparent;")
+        self.btn_toggle_input.setStyleSheet(STYLE_FLAT)
         self.btn_toggle_input.setCursor(Qt.PointingHandCursor)
         input_header.addWidget(self.btn_toggle_input)
         ic_layout.addLayout(input_header)
@@ -503,7 +497,7 @@ class Tab2TaggingUI(QWidget):
         )
 
         left_container = QFrame()
-        left_container.setStyleSheet("border: none; background: transparent;")
+        left_container.setStyleSheet(STYLE_FLAT)
         left_panel = QVBoxLayout(left_container)
         left_panel.setContentsMargins(0, 10, 20, 0)
         left_panel.setSpacing(20)
@@ -515,7 +509,7 @@ class Tab2TaggingUI(QWidget):
         self.tb_layout = QVBoxLayout(target_box)
         lbl_target_traits = QLabel("Set Target Traits")
         lbl_target_traits.setObjectName("SubHeader")
-        lbl_target_traits.setStyleSheet("border: none; background: transparent;")
+        lbl_target_traits.setStyleSheet(STYLE_FLAT)
         self.tb_layout.addWidget(lbl_target_traits)
 
         self.trait_container = QVBoxLayout()
@@ -525,7 +519,11 @@ class Tab2TaggingUI(QWidget):
         self.btn_add_trait.setIcon(qta.icon("mdi.plus", color="#0071E3"))
         self.btn_add_trait.setCursor(Qt.PointingHandCursor)
         self.btn_add_trait.setStyleSheet(
-            "QPushButton { background-color: transparent; color: #0071E3; font-weight: bold; font-size: 13px; border: none; padding: 8px; text-align: left; } QPushButton:hover { color: #005BB5; }"
+            "QPushButton { "
+            "background-color: transparent; color: #0071E3; font-weight: bold; "
+            "font-size: 13px; border: none; padding: 8px; text-align: left; "
+            "} "
+            "QPushButton:hover { color: #005BB5; }"
         )
         self.btn_add_trait.clicked.connect(self.add_trait_row)
         self.btn_add_trait.hide()
@@ -540,7 +538,7 @@ class Tab2TaggingUI(QWidget):
         algo_header_layout = QHBoxLayout()
         lbl_algo_params = QLabel("Algorithm Parameters")
         lbl_algo_params.setObjectName("SubHeader")
-        lbl_algo_params.setStyleSheet("border: none; background: transparent;")
+        lbl_algo_params.setStyleSheet(STYLE_FLAT)
         algo_header_layout.addWidget(lbl_algo_params)
         algo_header_layout.addStretch()
 
@@ -548,7 +546,12 @@ class Tab2TaggingUI(QWidget):
         self.btn_settings.setIcon(qta.icon("mdi.cog", color="#515154"))
         self.btn_settings.setCursor(Qt.PointingHandCursor)
         self.btn_settings.setStyleSheet(
-            "QPushButton { background-color: #FFFFFF; border: 1px solid #D1D1D6; border-radius: 6px; padding: 4px 10px; font-size: 12px; font-weight: bold; color: #515154; } QPushButton:hover { background-color: #F2F2F7; }"
+            "QPushButton { "
+            "background-color: #FFFFFF; border: 1px solid #D1D1D6; "
+            "border-radius: 6px; padding: 4px 10px; font-size: 12px; "
+            "font-weight: bold; color: #515154; "
+            "} "
+            "QPushButton:hover { background-color: #F2F2F7; }"
         )
         self.btn_settings.clicked.connect(self.open_settings)
         algo_header_layout.addWidget(self.btn_settings)
@@ -556,7 +559,8 @@ class Tab2TaggingUI(QWidget):
 
         self.lbl_algo_desc = QLabel()
         self.lbl_algo_desc.setStyleSheet(
-            "color: #515154; font-size: 12px; font-weight: 500; border: none; background: transparent; line-height: 1.5;"
+            "color: #515154; font-size: 12px; font-weight: 500; border: none;"
+            "background: transparent; line-height: 1.5;"
         )
         self.update_algo_desc()
         ab_layout.addWidget(self.lbl_algo_desc)
@@ -577,7 +581,7 @@ class Tab2TaggingUI(QWidget):
 
         table_title_lbl = QLabel("Annotation Status")
         table_title_lbl.setObjectName("SubHeader")
-        table_title_lbl.setStyleSheet("border: none; background: transparent;")
+        table_title_lbl.setStyleSheet(STYLE_FLAT)
         progress_layout.addWidget(table_title_lbl)
 
         self.status_table = QTableWidget(0, 3)
@@ -596,9 +600,19 @@ class Tab2TaggingUI(QWidget):
         self.status_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.status_table.setFocusPolicy(Qt.NoFocus)
         self.status_table.setStyleSheet("""
-            QTableWidget { border: 1px solid #E5E5EA; border-radius: 8px; background-color: #FFFFFF; outline: none; gridline-color: transparent; }
-            QTableWidget::item { padding: 4px; border-bottom: 1px solid #F2F2F7; font-size: 11px; color: #1D1D1F; }
-            QHeaderView::section { background-color: #FAFAFA; border: none; border-bottom: 1px solid #E5E5EA; font-size: 11px; font-weight: bold; color: #8E8E93; height: 28px; padding-left: 5px; }
+            QTableWidget {
+                border: 1px solid #E5E5EA; border-radius: 8px;
+                background-color: #FFFFFF; outline: none; gridline-color: transparent;
+            }
+            QTableWidget::item {
+                padding: 4px; border-bottom: 1px solid #F2F2F7; font-size: 11px;
+                color: #1D1D1F;
+            }
+            QHeaderView::section {
+                background-color: #FAFAFA; border: none;
+                border-bottom: 1px solid #E5E5EA; font-size: 11px; font-weight: bold;
+                color: #8E8E93; height: 28px; padding-left: 5px;
+            }
         """)
         progress_layout.addWidget(self.status_table, stretch=1)
         left_panel.addWidget(progress_card, stretch=1)
@@ -606,14 +620,17 @@ class Tab2TaggingUI(QWidget):
         self.splitter.addWidget(left_container)
 
         right_panel = QFrame()
-        right_panel.setStyleSheet("border: none; background: transparent;")
+        right_panel.setStyleSheet(STYLE_FLAT)
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(10, 10, 0, 0)
         right_layout.setSpacing(20)
 
         top_left_card = QFrame()
         top_left_card.setStyleSheet(
-            "QFrame { background-color: #FFFFFF; border: 1px solid #E5E5EA; border-radius: 10px; }"
+            "QFrame { "
+            "background-color: #FFFFFF; border: 1px solid #E5E5EA; "
+            "border-radius: 10px; "
+            "}"
         )
         top_left_vbox = QVBoxLayout(top_left_card)
         top_left_vbox.setContentsMargins(15, 15, 15, 15)
@@ -622,14 +639,30 @@ class Tab2TaggingUI(QWidget):
         viewer_header = QHBoxLayout()
         lbl_viewing_session = QLabel("Preview:")
         lbl_viewing_session.setObjectName("SubHeader")
-        lbl_viewing_session.setStyleSheet("border: none; background: transparent;")
+        lbl_viewing_session.setStyleSheet(STYLE_FLAT)
         viewer_header.addWidget(lbl_viewing_session)
         self.combo_viewer = QComboBox()
         self.combo_viewer.setStyleSheet("""
-            QComboBox { border: 1px solid #D1D1D6; border-radius: 6px; padding: 6px 12px; background: #FFFFFF; font-weight: 500; font-size: 13px; color: #1D1D1F; min-width: 150px; }
-            QComboBox::drop-down { subcontrol-origin: padding; subcontrol-position: top right; width: 30px; border-left: 1px solid #E5E5EA; background-color: transparent; }
-            QComboBox::down-arrow { width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid #8E8E93; margin-top: 1px; }
-            QComboBox QAbstractItemView { background: #FFFFFF; border: 1px solid #E5E5EA; selection-background-color: #F2F2F7; selection-color: #1D1D1F; outline: none; }
+            QComboBox {
+                border: 1px solid #D1D1D6; border-radius: 6px; padding: 6px 12px;
+                background: #FFFFFF; font-weight: 500; font-size: 13px; color: #1D1D1F;
+                min-width: 150px;
+            }
+            QComboBox::drop-down {
+                subcontrol-origin: padding; subcontrol-position: top right;
+                width: 30px; border-left: 1px solid #E5E5EA;
+                background-color: transparent;
+            }
+            QComboBox::down-arrow {
+                width: 0; height: 0; border-left: 4px solid transparent;
+                border-right: 4px solid transparent; border-top: 5px solid #8E8E93;
+                margin-top: 1px;
+            }
+            QComboBox QAbstractItemView {
+                background: #FFFFFF; border: 1px solid #E5E5EA;
+                selection-background-color: #F2F2F7; selection-color: #1D1D1F;
+                outline: none;
+            }
         """)
         self.combo_viewer.currentIndexChanged.connect(self.update_viewer)
         self.combo_viewer.setEnabled(False)
@@ -641,36 +674,43 @@ class Tab2TaggingUI(QWidget):
         )
         self.btn_open_img_folder.setCursor(Qt.PointingHandCursor)
         self.btn_open_img_folder.setStyleSheet(
-            "QPushButton { color: #0071E3; font-weight: bold; font-size: 11px; border: none; background: transparent; } QPushButton:hover { color: #005BB5; }"
+            "QPushButton { "
+            "color: #0071E3; font-weight: bold; font-size: 11px; border: none; "
+            "background: transparent; "
+            "} "
+            "QPushButton:hover { color: #005BB5; }"
         )
         self.btn_open_img_folder.setEnabled(False)
         self.btn_open_img_folder.clicked.connect(
-            lambda: (
-                os.startfile(self.current_res["session_dir"])
-                if hasattr(self, "current_res")
-                else None
-            )
+            lambda: hasattr(self, "current_res")
+            and open_path(self.current_res["session_dir"])
         )
         viewer_header.addWidget(self.btn_open_img_folder)
         viewer_header.addStretch()
         top_left_vbox.addLayout(viewer_header)
 
         self.nav_widget = QWidget()
-        self.nav_widget.setStyleSheet("border: none; background: transparent;")
+        self.nav_widget.setStyleSheet(STYLE_FLAT)
         nav_layout = QHBoxLayout(self.nav_widget)
         nav_layout.setContentsMargins(0, 0, 0, 0)
         self.btn_prev = QPushButton(" Prev Step")
         self.btn_prev.setIcon(qta.icon("mdi.chevron-left", color="#1D1D1F"))
         self.btn_prev.setCursor(Qt.PointingHandCursor)
         self.btn_prev.setStyleSheet(
-            "QPushButton { background-color: #F2F2F7; font-weight: bold; font-size: 12px; color: #1D1D1F; border-radius: 8px; padding: 8px 15px; border: none; } QPushButton:hover { background-color: #E5E5EA; } QPushButton:disabled { color: #A2A2A6; }"
+            "QPushButton { "
+            "background-color: #F2F2F7; font-weight: bold; font-size: 12px; "
+            "color: #1D1D1F; border-radius: 8px; padding: 8px 15px; border: none; "
+            "} "
+            "QPushButton:hover { background-color: #E5E5EA; } "
+            "QPushButton:disabled { color: #A2A2A6; }"
         )
         self.btn_prev.clicked.connect(lambda: self.change_step(-1))
         self.btn_prev.setEnabled(False)
 
         self.lbl_step_title = QLabel("Step 5: Final Strict Consensus")
         self.lbl_step_title.setStyleSheet(
-            "font-weight: 800; color: #A2A2A6; font-size: 13px; border: none; background: transparent;"
+            "font-weight: 800; color: #A2A2A6; font-size: 13px; border: none;"
+            "background: transparent;"
         )
         self.lbl_step_title.setAlignment(Qt.AlignCenter)
 
@@ -679,7 +719,12 @@ class Tab2TaggingUI(QWidget):
         self.btn_next.setLayoutDirection(Qt.RightToLeft)
         self.btn_next.setCursor(Qt.PointingHandCursor)
         self.btn_next.setStyleSheet(
-            "QPushButton { background-color: #F2F2F7; font-weight: bold; font-size: 12px; color: #1D1D1F; border-radius: 8px; padding: 8px 15px; border: none; } QPushButton:hover { background-color: #E5E5EA; } QPushButton:disabled { color: #A2A2A6; }"
+            "QPushButton { "
+            "background-color: #F2F2F7; font-weight: bold; font-size: 12px; "
+            "color: #1D1D1F; border-radius: 8px; padding: 8px 15px; border: none; "
+            "} "
+            "QPushButton:hover { background-color: #E5E5EA; } "
+            "QPushButton:disabled { color: #A2A2A6; }"
         )
         self.btn_next.clicked.connect(lambda: self.change_step(1))
         self.btn_next.setEnabled(False)
@@ -693,7 +738,8 @@ class Tab2TaggingUI(QWidget):
         self.img_preview.setAlignment(Qt.AlignCenter)
         self.img_preview.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.img_preview.setStyleSheet(
-            "background-color: #FAFAFA; border: 2px dashed #D1D1D6; border-radius: 10px; color: #8E8E93; font-weight: bold; font-size: 13px;"
+            "background-color: #FAFAFA; border: 2px dashed #D1D1D6;"
+            "border-radius: 10px; color: #8E8E93; font-weight: bold; font-size: 13px;"
         )
         self.img_preview.setMinimumHeight(240)
         self.img_preview.setCursor(Qt.PointingHandCursor)
@@ -701,7 +747,7 @@ class Tab2TaggingUI(QWidget):
         top_left_vbox.addWidget(self.img_preview, stretch=1)
 
         action_layout = QHBoxLayout()
-        btn_style = "QPushButton { background-color: #FFFFFF; color: #1D1D1F; font-weight: bold; font-size: 11px; border-radius: 6px; border: 1px solid #D1D1D6; padding: 6px 10px; } QPushButton:hover { background-color: #F2F2F7; } QPushButton:disabled { color: #A2A2A6; border-color: #E5E5EA; }"
+        btn_style = STYLE_SMALL_BUTTON
 
         self.btn_open_report = QPushButton(" Report CSV")
         self.btn_open_report.setIcon(
@@ -711,11 +757,8 @@ class Tab2TaggingUI(QWidget):
         self.btn_open_report.setStyleSheet(btn_style)
         self.btn_open_report.setEnabled(False)
         self.btn_open_report.clicked.connect(
-            lambda: (
-                os.startfile(self.current_res["out_report_csv"])
-                if hasattr(self, "current_res")
-                else None
-            )
+            lambda: hasattr(self, "current_res")
+            and open_path(self.current_res["out_report_csv"])
         )
         action_layout.addWidget(self.btn_open_report)
 
@@ -725,9 +768,7 @@ class Tab2TaggingUI(QWidget):
         self.btn_open_svg.setStyleSheet(btn_style)
         self.btn_open_svg.setEnabled(False)
         self.btn_open_svg.clicked.connect(
-            lambda: (
-                os.startfile(self.current_svg) if hasattr(self, "current_svg") else None
-            )
+            lambda: hasattr(self, "current_svg") and open_path(self.current_svg)
         )
         action_layout.addWidget(self.btn_open_svg)
 
@@ -737,7 +778,10 @@ class Tab2TaggingUI(QWidget):
 
         bottom_card = QFrame()
         bottom_card.setStyleSheet(
-            "QFrame { background-color: #FFFFFF; border: 1px solid #E5E5EA; border-radius: 10px; }"
+            "QFrame { "
+            "background-color: #FFFFFF; border: 1px solid #E5E5EA; "
+            "border-radius: 10px; "
+            "}"
         )
         bottom_half_layout = QVBoxLayout(bottom_card)
         bottom_half_layout.setContentsMargins(15, 15, 15, 15)
@@ -746,7 +790,7 @@ class Tab2TaggingUI(QWidget):
         nwk_header = QHBoxLayout()
         nwk_title_lbl = QLabel("NWK Text Output")
         nwk_title_lbl.setObjectName("SubHeader")
-        nwk_title_lbl.setStyleSheet("border: none; background: transparent;")
+        nwk_title_lbl.setStyleSheet(STYLE_FLAT)
         nwk_header.addWidget(nwk_title_lbl)
 
         self.btn_open_nwk_folder = QPushButton(" Open NWK Folder")
@@ -755,15 +799,17 @@ class Tab2TaggingUI(QWidget):
         )
         self.btn_open_nwk_folder.setCursor(Qt.PointingHandCursor)
         self.btn_open_nwk_folder.setStyleSheet(
-            "QPushButton { color: #0071E3; font-weight: bold; font-size: 11px; border: none; background: transparent; } QPushButton:hover { color: #005BB5; } QPushButton:disabled { color: #A2A2A6; }"
+            "QPushButton { "
+            "color: #0071E3; font-weight: bold; font-size: 11px; border: none; "
+            "background: transparent; "
+            "} "
+            "QPushButton:hover { color: #005BB5; } "
+            "QPushButton:disabled { color: #A2A2A6; }"
         )
         self.btn_open_nwk_folder.setEnabled(False)
         self.btn_open_nwk_folder.clicked.connect(
-            lambda: (
-                os.startfile(self.current_res["session_dir"])
-                if hasattr(self, "current_res")
-                else None
-            )
+            lambda: hasattr(self, "current_res")
+            and open_path(self.current_res["session_dir"])
         )
         nwk_header.addWidget(self.btn_open_nwk_folder)
         nwk_header.addStretch()
@@ -771,7 +817,10 @@ class Tab2TaggingUI(QWidget):
 
         self.txt_preview = QTextBrowser()
         self.txt_preview.setStyleSheet(
-            "border: 1px solid #E5E5EA; border-radius: 8px; background: #FAFAFA; color: #1D1D1F; font-family: 'Consolas', monospace; font-size: 11px; padding: 10px; font-weight: normal; outline: none;"
+            "border: 1px solid #E5E5EA; border-radius: 8px; background: #FAFAFA;"
+            "color: #1D1D1F;"
+            "font-family: Consolas, Menlo, 'DejaVu Sans Mono', monospace;"
+            "font-size: 11px; padding: 10px; font-weight: normal; outline: none;"
         )
         bottom_half_layout.addWidget(self.txt_preview, stretch=1)
 
@@ -798,12 +847,7 @@ class Tab2TaggingUI(QWidget):
 
     def reset_viewer(self):
         if self.nwk_files:
-            self.run_btn.setText(" Run New Annotation Session")
-            self.run_btn.setIcon(qta.icon("mdi.play", color="white"))
-            self.run_btn.setStyleSheet("""
-                QPushButton { background-color: #1D1D1F; color: white; font-size: 14px; font-weight: bold; border-radius: 8px; border: none; }
-                QPushButton:hover { background-color: #333333; }
-            """)
+            self.run_btn.set_state("run", " Run New Annotation Session", "mdi.play")
 
     def add_trait_row(self):
         if not self.csv_file:
@@ -819,7 +863,10 @@ class Tab2TaggingUI(QWidget):
             self.reset_viewer()
 
     def update_algo_desc(self):
-        desc = f"• Fitch Parsimony\n• Sankoff Parsimony (Gain: {self.algo_params['sankoff_gain']}, Loss: {self.algo_params['sankoff_loss']})\n• Felsenstein ML (μ: {self.algo_params['felsenstein_mu']})"
+        desc = (
+            "• Fitch Parsimony\n"
+            f"• Felsenstein ML (μ: {self.algo_params['felsenstein_mu']})"
+        )
         self.lbl_algo_desc.setText(desc)
 
     def open_settings(self):
@@ -854,10 +901,7 @@ class Tab2TaggingUI(QWidget):
             self.log_msg.emit(f"[INFO] Loaded Master CSV: {Path(fname).name}")
             if self.csv_file and self.nwk_files:
                 self.run_btn.setEnabled(True)
-                self.run_btn.setStyleSheet(
-                    "QPushButton { background-color: #1D1D1F; color: white; font-size: 14px; font-weight: bold; border-radius: 8px; border: none; } QPushButton:hover { background-color: #333333; }"
-                )
-                self.run_btn.setText("Run Auto-Consensus Tagging")
+                self.run_btn.set_state("run", "Run Auto-Consensus Tagging")
         else:
             self.csv_file = None
             self.run_btn.setEnabled(False)
@@ -885,10 +929,7 @@ class Tab2TaggingUI(QWidget):
 
             if self.csv_file:
                 self.run_btn.setEnabled(True)
-                self.run_btn.setStyleSheet(
-                    "QPushButton { background-color: #1D1D1F; color: white; font-size: 14px; font-weight: bold; border-radius: 8px; border: none; } QPushButton:hover { background-color: #333333; }"
-                )
-                self.run_btn.setText("Run Auto-Consensus Tagging")
+                self.run_btn.set_state("run", "Run Auto-Consensus Tagging")
         else:
             self.run_btn.setEnabled(False)
 
@@ -899,56 +940,50 @@ class Tab2TaggingUI(QWidget):
         lbl = QLabel(text)
         lbl.setAlignment(Qt.AlignCenter)
         lbl.setStyleSheet(
-            f"background-color: {bg_color}; color: {text_color}; border-radius: 6px; font-weight: 800; font-size: 11px; padding: 4px 8px;"
+            f"background-color: {bg_color}; color: {text_color}; "
+            "border-radius: 6px; font-weight: 800; font-size: 11px; "
+            "padding: 4px 8px;"
         )
         layout.addWidget(lbl)
         return wrapper, lbl
 
-    def start_tagging(self):
-        selections = {}
-        all_selected_vals = []
-        for row in self.trait_rows:
-            col, vals = row.get_selected()
-            if vals:
-                if col not in selections:
-                    selections[col] = []
-                selections[col].extend(vals)
-                all_selected_vals.extend([str(v).replace(" ", "") for v in vals])
+    def _collect_selections(self) -> dict:
+        """Trait column to selected states, read off the pill widgets.
 
+        A column can appear in more than one row, since each row picks its own
+        column, so the states accumulate under it rather than replacing.
+        """
+        selections = {}
+        for row in self.trait_rows:
+            column, values = row.get_selected()
+            if not values:
+                continue
+            selections.setdefault(column, []).extend(str(v).strip() for v in values)
+        return selections
+
+    def start_tagging(self):
+        selections = self._collect_selections()
         if not selections:
-            Popup(
+            message_box(
+                self,
+                QMessageBox.Warning,
                 "Missing Info",
                 "Please select at least one Target Trait Pill.",
-                "warning",
-                self,
-            ).exec()
+            ).exec_()
             return
 
-        target_vars_str = "_".join(all_selected_vals)[:40]
-        if not target_vars_str:
-            target_vars_str = "Traits"
+        target_vars_str = t2_tagging_logic.trait_label(selections)
 
         df = pd.read_csv(self.csv_file)
         name_col = self.dz_csv.item_widgets[self.csv_file].combo.currentText()
-        if not name_col or name_col not in df.columns:
-            self.log_msg.emit(f"[ERROR] Species column '{name_col}' is not valid.")
+        try:
+            tagged_data = t2_tagging_logic.build_tagged_data(df, name_col, selections)
+        except KeyError as exc:
+            self.log_msg.emit(f"[ERROR] {exc}")
             return
 
-        tagged_data = {}
-        for _, row in df.iterrows():
-            species = t2_tagging_logic.format_name(row[name_col])
-            matched_traits = []
-            for col, target_vals in selections.items():
-                val = str(row[col])
-                if val in target_vals:
-                    matched_traits.append(val)
-            tagged_data[species] = " + ".join(matched_traits) if matched_traits else ""
-
         self.run_btn.setEnabled(False)
-        self.run_btn.setText("Processing...")
-        self.run_btn.setStyleSheet(
-            "QPushButton { background-color: #FF9500; color: white; font-size: 14px; font-weight: bold; border-radius: 8px; border: none; }"
-        )
+        self.run_btn.set_state("busy", "Processing...")
 
         self.current_batch_labels = {}
         for nwk in self.nwk_files:
@@ -988,11 +1023,7 @@ class Tab2TaggingUI(QWidget):
 
     def on_finished(self, res):
         self.run_btn.setEnabled(True)
-        self.run_btn.setText("Run Auto-Consensus Annotation")
-        self.run_btn.setStyleSheet("""
-            QPushButton { background-color: #1D1D1F; color: white; font-size: 14px; font-weight: bold; border-radius: 8px; border: none; }
-            QPushButton:hover { background-color: #333333; }
-        """)
+        self.run_btn.set_state("run", "Run Auto-Consensus Annotation")
 
         first_nwk_name = (
             os.path.basename(self.nwk_files[0]) if self.nwk_files else "Tagging_Job"
@@ -1000,6 +1031,60 @@ class Tab2TaggingUI(QWidget):
 
         if res.get("status") == "success":
             new_results = res["results"]
+            for key, r in new_results.items():
+                if r.get("status") != "success":
+                    continue
+                n_un = len(r.get("unmatched_leaves", []))
+                if n_un:
+                    names = ", ".join(r["unmatched_leaves"][:5])
+                    self.log_msg.emit(
+                        "[WARNING] %s: %d of %d tree leaves had no trait entry and "
+                        "were treated as background: %s%s"
+                        % (
+                            os.path.basename(r.get("original_nwk", key)),
+                            n_un,
+                            r.get("n_leaves", 0),
+                            names,
+                            " ..." if n_un > 5 else "",
+                        )
+                    )
+                else:
+                    self.log_msg.emit(
+                        "[INFO] %s: all %d tree leaves matched the trait table."
+                        % (
+                            os.path.basename(r.get("original_nwk", key)),
+                            r.get("n_leaves", 0),
+                        )
+                    )
+                for w in r.get("mu_warnings", []):
+                    self.log_msg.emit(
+                        "[WARNING] %s: %s"
+                        % (os.path.basename(r.get("original_nwk", key)), w)
+                    )
+                for item in r.get("tree_cleanup_notes", []):
+                    detail = ""
+                    if item["taxa"]:
+                        detail = " — %d taxa below: %s" % (
+                            item["taxa_count"],
+                            item["taxa"],
+                        )
+                    self.log_msg.emit(
+                        "[INFO] %s: %s%s"
+                        % (
+                            os.path.basename(r.get("original_nwk", key)),
+                            item["note"],
+                            detail,
+                        )
+                    )
+                if r.get("mu_estimated"):
+                    self.log_msg.emit(
+                        "[INFO] %s: estimated transition rate mu = %.3f"
+                        % (
+                            os.path.basename(r.get("original_nwk", key)),
+                            r.get("mu_used", 0.0),
+                        )
+                    )
+
             self.batch_results.update(new_results)
 
             self.combo_viewer.clear()
@@ -1010,7 +1095,8 @@ class Tab2TaggingUI(QWidget):
             self.btn_prev.setEnabled(True)
             self.btn_next.setEnabled(True)
             self.lbl_step_title.setStyleSheet(
-                "font-weight: 800; color: #1D1D1F; font-size: 13px; border: none; background: transparent;"
+                "font-weight: 800; color: #1D1D1F; font-size: 13px; border: none;"
+                "background: transparent;"
             )
 
             self.btn_open_img_folder.setEnabled(True)
@@ -1025,16 +1111,17 @@ class Tab2TaggingUI(QWidget):
                     if data.get("status") == "success":
                         lbl.setText("Completed")
                         lbl.setStyleSheet(
-                            "background-color: #E5F0FF; color: #0071E3; border-radius: 6px; font-weight: 800; font-size: 11px; padding: 4px 8px;"
+                            "background-color: #E5F0FF; color: #0071E3;"
+                            "border-radius: 6px; font-weight: 800; font-size: 11px;"
+                            "padding: 4px 8px;"
                         )
                     else:
                         lbl.setText("Error")
-                        lbl.setStyleSheet(
-                            "background-color: #FFECEB; color: #FF3B30; border-radius: 6px; font-weight: 800; font-size: 11px; padding: 4px 8px;"
-                        )
+                        lbl.setStyleSheet(STYLE_ERROR_PILL)
 
             self.log_msg.emit(
-                f"[SUCCESS] Batch Annotation Complete! {len(new_results)} session(s) saved."
+                f"[SUCCESS] Batch Annotation Complete! "
+                f"{len(new_results)} session(s) saved."
             )
             self.progress_update.emit(first_nwk_name, 100, "Completed")
 
@@ -1045,13 +1132,11 @@ class Tab2TaggingUI(QWidget):
 
             for lbl in self.current_batch_labels.values():
                 lbl.setText("Error")
-                lbl.setStyleSheet(
-                    "background-color: #FFECEB; color: #FF3B30; border-radius: 6px; font-weight: 800; font-size: 11px; padding: 4px 8px;"
-                )
+                lbl.setStyleSheet(STYLE_ERROR_PILL)
             self.log_msg.emit(f"[ERROR] {full_err}")
             self.progress_update.emit(first_nwk_name, 0, "Error Occurred")
             common_utils.log_error_to_file(
-                t1_st1_logic.CURRENT_PROJECT_PATH, "Tree Annotation", full_err
+                t1_st1_logic.CURRENT_PROJECT_PATH, t2_tagging_logic.TAB_NAME, full_err
             )
 
     def update_viewer(self):
@@ -1071,16 +1156,30 @@ class Tab2TaggingUI(QWidget):
         base = self.current_res["out_fig_base"]
         first_img = f"{base}_step0.svg"
 
-        nwk_path = list(self.nwk_files)[0] if self.nwk_files else None
+        # This result's own tree, not the first of the batch. Drawing another
+        # gene's topology matches the tips, whose names are shared, but not the
+        # internal clades, so the scores are silently dropped for most internal
+        # nodes and those branches come out inactive however they were tagged.
+        #
+        # The collapsed tree when one was written. The algorithms and the scores
+        # file both refer to it, so drawing the uncollapsed tree leaves every
+        # collapsed node without a score for the same reason.
+        nwk_path = self.current_res.get("cleaned_tree_path") or self.current_res.get(
+            "original_nwk"
+        )
         if nwk_path and not os.path.exists(first_img):
             t2_tagging_logic.render_all_steps(
-                nwk_path, base, self.current_res["tagged_data"]
+                nwk_path,
+                base,
+                self.current_res["tagged_data"],
+                no_signal=self.current_res.get("no_signal", False),
             )
 
-        self.current_frames = [f"{base}_step{i}.svg" for i in range(5)]
-        self.current_svgs = [f"{base}_step{i}.svg" for i in range(5)]
+        steps = range(t2_tagging_logic.N_STEPS)
+        self.current_frames = [f"{base}_step{i}.svg" for i in steps]
+        self.current_svgs = [f"{base}_step{i}.svg" for i in steps]
         self.current_nwks = self.current_res["nwk_steps"]
-        self.set_step_absolute(4)
+        self.set_step_absolute(t2_tagging_logic.N_STEPS - 1)
 
     def show_image(self, path):
         if os.path.exists(path):
@@ -1098,15 +1197,12 @@ class Tab2TaggingUI(QWidget):
         self.set_step_absolute(self.current_step + delta)
 
     def set_step_absolute(self, idx):
-        self.current_step = idx
-        self.current_step = max(0, min(idx, 4))
+        self.current_step = max(0, min(idx, t2_tagging_logic.N_STEPS - 1))
         self.btn_prev.setEnabled(self.current_step > 0)
         labels = [
             "Step 1: Fitch Parsimony",
-            "Step 2: Sankoff Parsimony",
-            "Step 3: Felsenstein ML",
-            "Step 4: Two-Way Agreements",
-            "Step 5: Final Strict Consensus",
+            "Step 2: Felsenstein ML",
+            "Step 3: Consensus",
         ]
         self.lbl_step_title.setText(labels[self.current_step])
         if hasattr(self, "current_frames"):
