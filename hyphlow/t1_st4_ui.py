@@ -15,6 +15,7 @@ from hyphlow import t1_st4_logic
 from hyphlow.common_ui import (
     UnifiedDropZone,
     PrimaryButton,
+    open_path,
 )
 
 
@@ -116,13 +117,6 @@ class Subtab4PruningUI(QWidget):
 
         btn_layout = QHBoxLayout()
         self.btn_run = PrimaryButton(" Run Tree Pruning", "mdi.play")
-        self.btn_run.setFixedHeight(44)
-        self.btn_run.setCursor(Qt.PointingHandCursor)
-        self.btn_run.setStyleSheet("""
-            QPushButton { background-color: #1D1D1F; color: white; font-size: 14px; font-weight: bold; border-radius: 8px; border: none; padding: 0 24px; }
-            QPushButton:hover { background-color: #333333; }
-            QPushButton:disabled { background-color: #E5E5EA; color: #8E8E93; }
-        """)
         self.btn_run.clicked.connect(self.run_pruning)
         btn_layout.addWidget(self.btn_run, stretch=1)
 
@@ -163,8 +157,9 @@ class Subtab4PruningUI(QWidget):
             self.file_progress_update.emit(os.path.basename(f), 50, "Pruning Tree...")
 
         gene_dict = self.dz_fasta.get_all_genes()
+        identity_dict = self.dz_fasta.get_all_identities()
         results, last_rep = t1_st4_logic.run_pruning_pipeline(
-            self.fasta_files, self.nwk_files, gene_dict
+            self.fasta_files, self.nwk_files, gene_dict, identity_dict
         )
 
         success_count = sum(1 for r in results if r.get("success", False))
@@ -172,7 +167,18 @@ class Subtab4PruningUI(QWidget):
 
         for f in self.fasta_files:
             self.file_progress_update.emit(os.path.basename(f), 100, "Pruning Complete")
-
+        for r in results:
+            missing = [row[0] for row in r.get("details_data", []) if row[2] == "ERROR"]
+            if not missing:
+                continue
+            shown = ", ".join(missing[:6])
+            if len(missing) > 6:
+                shown += ", +%d more" % (len(missing) - 6)
+            self.log_msg.emit(
+                "[WARNING] %s: %d taxon(s) in the alignment are missing from the "
+                "master tree and were dropped: %s"
+                % (r.get("fasta_name", r.get("file", "?")), len(missing), shown)
+            )
         if mismatch_found:
             self.log_msg.emit("[WARNING] Taxon mismatch detected during tree pruning.")
             self.log_msg.emit(
@@ -186,23 +192,7 @@ class Subtab4PruningUI(QWidget):
             )
 
             if last_rep and os.path.exists(last_rep):
-                rep_dir = os.path.dirname(last_rep)
-                self.log_msg.emit(
-                    f"[INFO] Automatically opening report directory: {rep_dir}"
-                )
-                try:
-                    import platform
-                    import subprocess
-                    
-                    if platform.system() == "Windows":
-                        os.startfile(rep_dir)
-                    elif platform.system() == "Darwin":  # Mac
-                        subprocess.call(["open", rep_dir])
-                    else:  # Linux / WSL
-                        subprocess.call(["xdg-open", rep_dir])
-                        
-                except Exception as e:
-                    self.log_msg.emit(f"[ERROR] Could not open directory: {e}")
+                self.log_msg.emit("[INFO] Report saved to: %s" % last_rep)
         else:
             self.log_msg.emit(
                 f"[SUCCESS] Pruning complete: {success_count}/{len(results)} successful. Perfect taxon match across all files."
