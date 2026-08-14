@@ -1,5 +1,3 @@
-import os
-import sys
 import csv
 import re
 import datetime
@@ -10,13 +8,8 @@ import pandas as pd
 
 from hyphlow import common_utils
 from hyphlow import t1_st1_logic
+from hyphlow import manifest_logic_tab
 
-try:
-    base = Path(sys._MEIPASS)
-except Exception:
-    base = Path(os.path.abspath("."))
-
-CURRENT_PROJECT_PATH = base
 
 
 def get_csv_master_names(csv_path, target_col):
@@ -175,6 +168,13 @@ def run_smart_verification(csv_path, csv_col, fasta_files, nwk_files):
     return all_results
 
 
+def _base_name_for(file_path):
+    org, gene = manifest_logic_tab.resolve_identity(
+        t1_st1_logic.CURRENT_PROJECT_PATH, file_path
+    )
+    return common_utils.make_base_name(org, gene)
+
+
 def apply_and_save_reconciled(
     fasta_files, fasta_corrections, nwk_files, nwk_corrections, result_blocks=None
 ):
@@ -203,7 +203,7 @@ def apply_and_save_reconciled(
 
         for fasta in fasta_files:
             f_path = Path(fasta)
-            gene = f_path.name.split("_")[0].upper()
+            gene = _base_name_for(f_path)
 
             new_f_path_str, v = common_utils.generate_smart_filename(
                 gene, "FASTA_REC", fasta_out_dir, ".fasta", is_report=False
@@ -276,7 +276,19 @@ def apply_and_save_reconciled(
                 with open(new_f_path, "w", encoding="utf-8") as f:
                     f.writelines(lines)
                 saved_fastas.append(new_f_path)
-
+                try:
+                    manifest_logic_tab.add_row(
+                        t1_st1_logic.CURRENT_PROJECT_PATH,
+                        *manifest_logic_tab.resolve_identity(
+                            t1_st1_logic.CURRENT_PROJECT_PATH, f_path
+                        ),
+                        "",
+                        "aln_rec",
+                        str(new_f_path),
+                        str(f_path),
+                    )
+                except Exception as e:
+                    print("manifest write failed:", e)
                 _generate_report(
                     rep_path,
                     "FASTA Reconciliation",
@@ -299,7 +311,7 @@ def apply_and_save_reconciled(
 
         for nwk in nwk_files:
             n_path = Path(nwk)
-            gene = n_path.name.split("_")[0].upper()
+            gene = _base_name_for(n_path)
 
             new_n_path_str, v = common_utils.generate_smart_filename(
                 gene, "NWK_REC", nwk_out_dir, ".nwk", is_report=False
@@ -371,6 +383,19 @@ def apply_and_save_reconciled(
 
                 tree.write(outfile=str(new_n_path), format=1)
                 saved_nwks.append(new_n_path)
+                try:
+                    manifest_logic_tab.add_row(
+                        t1_st1_logic.CURRENT_PROJECT_PATH,
+                        *manifest_logic_tab.resolve_identity(
+                            t1_st1_logic.CURRENT_PROJECT_PATH, n_path
+                        ),
+                        "",
+                        "tree_rec",
+                        str(new_n_path),
+                        str(n_path),
+                    )
+                except Exception as e:
+                    print("manifest write failed:", e)
 
                 _generate_report(
                     rep_path,
