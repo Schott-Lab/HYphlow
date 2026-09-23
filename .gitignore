@@ -14,6 +14,9 @@ env/
 hyphlow_env/
 .conda/
 
+# NCBI taxonomy dump: hundreds of MB, refreshed by NCBI, downloaded on first use
+taxopy_db/
+
 # OS generated files
 .DS_Store
 Thumbs.db
