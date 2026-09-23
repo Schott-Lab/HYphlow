@@ -1,24 +1,42 @@
-import json
 from pathlib import Path
+
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
     QFrame,
-    QLabel,
-    QTableWidget,
-    QTableWidgetItem,
+    QHBoxLayout,
     QHeaderView,
+    QLabel,
+    QLineEdit,
     QScrollArea,
     QSizePolicy,
-    QLineEdit,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
 )
-from PyQt5.QtCore import Qt, pyqtSignal
 
-from hyphlow.common_ui import UnifiedDropZone, PrimaryButton, open_path
-from hyphlow import common_utils
-from hyphlow import t1_st1_logic
-from hyphlow import t4_summary_logic
+from hyphlow import common_utils, t1_st1_logic, t4_summary_logic
+from hyphlow.common_ui import PrimaryButton, UnifiedDropZone
+
+# =========================================================== constants
+
+COL_FILE, COL_GENE, COL_TAG, COL_MODEL, COL_STATUS = range(5)
+
+BADGE_READY = ("#F2F2F7", "#8E8E93")
+BADGE_BUSY = ("#FFF9E5", "#FF9500")
+BADGE_DONE = ("#E5F0FF", "#0071E3")
+BADGE_ERROR = ("#FFECEB", "#FF3B30")
+
+# What each failure means for the person holding the files.
+SOLUTIONS = {
+    "PermissionError": "Close the report in Excel and export again.",
+    "ValueError": "Check that these are the JSON files HyPhy wrote.",
+    "KeyError": "Run the analysis again; this file is incomplete.",
+    "IndexError": "Run the analysis again; this file is incomplete.",
+    "TypeError": "Run the analysis again; this file is incomplete.",
+    "NoValidData": "None of the files could be read as a HyPhy result.",
+}
+DEFAULT_SOLUTION = "See the error report for details."
 
 
 class Tab4SummaryUI(QWidget):
@@ -27,9 +45,11 @@ class Tab4SummaryUI(QWidget):
     def __init__(self):
         super().__init__()
         self.json_files = []
-        self.excel_files = []
         self.file_status_labels = {}
+        self.thread = None
         self._setup_ui()
+
+    # ============================================================== ui
 
     def _setup_ui(self):
         master_layout = QVBoxLayout(self)
@@ -50,15 +70,19 @@ class Tab4SummaryUI(QWidget):
         header_vbox = QVBoxLayout()
         header_vbox.setSpacing(4)
 
-        header_lbl = QLabel("Results Summary & Visualization")
+        header_lbl = QLabel("Results Summary")
         header_lbl.setObjectName("SectionHeader")
         header_lbl.setStyleSheet("border: none; background: transparent;")
         header_vbox.addWidget(header_lbl)
 
         desc_lbl = QLabel(
-            "Parse Triplicate JSON outputs into Excel reports and generate publication-ready SVG visualizations."
+            "Collects the HyPhy result files of a project into one spreadsheet: "
+            "one row per analysis, with the branch or site level detail on its "
+            "own sheet. Where an analysis was repeated, the run with the lowest "
+            "AIC-c is the one reported."
         )
         desc_lbl.setObjectName("SubText")
+        desc_lbl.setWordWrap(True)
         desc_lbl.setStyleSheet("border: none; background: transparent;")
         header_vbox.addWidget(desc_lbl)
 
@@ -67,21 +91,19 @@ class Tab4SummaryUI(QWidget):
         self.input_card = QFrame()
         self.input_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
         self.input_card.setStyleSheet(
-            "QFrame { background-color: #FFFFFF; border: 1px solid #E5E5EA; border-radius: 10px; }"
+            "QFrame { background-color: #FFFFFF; border: 1px solid #E5E5EA;"
+            " border-radius: 10px; }"
         )
         ic_layout = QVBoxLayout(self.input_card)
         ic_layout.setContentsMargins(15, 10, 15, 15)
         ic_layout.setSpacing(10)
 
-        input_header = QHBoxLayout()
-        lbl_input_title = QLabel("1. JSON File Input")
+        lbl_input_title = QLabel("HyPhy Result Files")
         lbl_input_title.setObjectName("SubHeader")
         lbl_input_title.setStyleSheet(
             "border: none; background: transparent; font-weight: bold;"
         )
-        input_header.addWidget(lbl_input_title)
-        input_header.addStretch()
-        ic_layout.addLayout(input_header)
+        ic_layout.addWidget(lbl_input_title)
 
         self.dz_json = UnifiedDropZone(
             [".json"],
@@ -89,34 +111,36 @@ class Tab4SummaryUI(QWidget):
             show_dropdown=False,
             file_type="json",
             show_gene_input=False,
+            # file_kind() has no JSON case and falls back to CSV, which would
+            # open the browser in the Tab 1 folder.
+            default_subdir=("Results", "HyPhy_Execution"),
         )
         self.dz_json.files_updated.connect(self.handle_json_drop)
-        if hasattr(self.dz_json, "scroll_area"):
-            self.dz_json.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-            self.dz_json.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-            self.dz_json.scroll_area.setWidgetResizable(True)
-            self.dz_json.scroll_area.setMaximumHeight(200)
-
         ic_layout.addWidget(self.dz_json)
 
-        table_card = QFrame()
-        table_card.setStyleSheet(
-            "QFrame { background-color: transparent; border: none; }"
-        )
-        tc_layout = QVBoxLayout(table_card)
-        tc_layout.setContentsMargins(0, 5, 0, 0)
-        tc_layout.setSpacing(10)
+        ic_layout.addWidget(self._build_status_table())
+        main_layout.addWidget(self.input_card)
 
-        self.status_table = QTableWidget(0, 4)
+        self.global_scroll.setWidget(scroll_content)
+        master_layout.addWidget(self.global_scroll)
+
+    def _build_status_table(self):
+        card = QFrame()
+        card.setStyleSheet("QFrame { background-color: transparent; border: none; }")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(0, 5, 0, 0)
+        layout.setSpacing(10)
+
+        self.status_table = QTableWidget(0, 5)
         self.status_table.setHorizontalHeaderLabels(
-            ["File Name", "Gene", "Detected Model", "Status"]
+            ["File Name", "Gene", "Foreground", "Analysis", "Status"]
         )
         header = self.status_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.Stretch)
-        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(3, QHeaderView.Fixed)
-        self.status_table.setColumnWidth(3, 120)
+        header.setSectionResizeMode(COL_FILE, QHeaderView.Stretch)
+        for col in (COL_GENE, COL_TAG, COL_MODEL):
+            header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(COL_STATUS, QHeaderView.Fixed)
+        self.status_table.setColumnWidth(COL_STATUS, 120)
 
         self.status_table.verticalHeader().setVisible(False)
         self.status_table.verticalHeader().setDefaultSectionSize(36)
@@ -127,7 +151,7 @@ class Tab4SummaryUI(QWidget):
             QTableWidget::item { padding: 4px; border-bottom: 1px solid #F2F2F7; }
             QHeaderView::section { background-color: #FAFAFA; border: none; border-bottom: 1px solid #E5E5EA; height: 28px; padding-left: 5px; }
         """)
-        tc_layout.addWidget(self.status_table)
+        layout.addWidget(self.status_table)
 
         btn_layout = QHBoxLayout()
         self.input_custom_name = QLineEdit()
@@ -143,44 +167,10 @@ class Tab4SummaryUI(QWidget):
         self.btn_export.clicked.connect(self.export_to_excel)
         btn_layout.addWidget(self.btn_export)
 
-        tc_layout.addLayout(btn_layout)
-        ic_layout.addWidget(table_card)
-        main_layout.addWidget(self.input_card)
+        layout.addLayout(btn_layout)
+        return card
 
-        self.viz_card = QFrame()
-        self.viz_card.setStyleSheet(
-            "QFrame { background-color: #FFFFFF; border: 1px solid #E5E5EA; border-radius: 10px; }"
-        )
-        viz_layout = QVBoxLayout(self.viz_card)
-        viz_layout.setContentsMargins(15, 15, 15, 15)
-        self.viz_card.setEnabled(False)
-
-        viz_layout.addWidget(
-            QLabel(
-                "2. Visualize Results (SVG)",
-                styleSheet="font-weight: bold; border: none; background: transparent;",
-            )
-        )
-
-        self.dz_excel = UnifiedDropZone(
-            [".xlsx"],
-            "Summary Excel Reports",
-            file_type="summary",
-            show_gene_input=False,
-        )
-        self.dz_excel.files_updated.connect(self.handle_excel_drop)
-        viz_layout.addWidget(self.dz_excel)
-
-        self.btn_viz = PrimaryButton(
-            " Generate SVG Plots & Source Data", "mdi.chart-scatter-plot"
-        )
-        self.btn_viz.clicked.connect(self.run_visualization)
-        viz_layout.addWidget(self.btn_viz)
-
-        main_layout.addWidget(self.viz_card)
-
-        self.global_scroll.setWidget(scroll_content)
-        master_layout.addWidget(self.global_scroll)
+    # ========================================================== badges
 
     def create_status_badge(self, text, bg_color, text_color):
         wrapper = QWidget()
@@ -189,68 +179,57 @@ class Tab4SummaryUI(QWidget):
         lbl = QLabel(text)
         lbl.setAlignment(Qt.AlignCenter)
         lbl.setStyleSheet(
-            f"background-color: {bg_color}; color: {text_color}; border-radius: 6px; font-weight: 800; font-size: 11px; padding: 4px 8px;"
+            f"background-color: {bg_color}; color: {text_color}; border-radius: 6px;"
+            " font-weight: 800; font-size: 11px; padding: 4px 8px;"
         )
         layout.addWidget(lbl)
         return wrapper, lbl
+
+    def _set_badge(self, label, text, colors, tooltip=""):
+        bg, fg = colors
+        label.setText(text)
+        label.setToolTip(tooltip)
+        label.setStyleSheet(
+            f"background-color: {bg}; color: {fg}; border-radius: 6px;"
+            " font-weight: 800; font-size: 11px; padding: 4px 8px;"
+        )
+
+    # =========================================================== input
 
     def handle_json_drop(self, files):
         self.json_files = files
         self.status_table.setRowCount(0)
         self.file_status_labels.clear()
+        self.btn_export.setEnabled(bool(files))
 
-        if files:
-            self.log_msg.emit(f"[INFO] Loaded {len(files)} JSON result file(s).")
-            self.status_table.setRowCount(len(files))
+        if not files:
+            return
 
-            known_models = ["BUSTED", "aBSREL", "RELAX", "FEL", "MEME", "FUBAR", "SLAC"]
+        self.log_msg.emit(f"[INFO] Loaded {len(files)} result file(s).")
+        self.status_table.setRowCount(len(files))
 
-            for i, f in enumerate(files):
-                base_name = Path(f).name
-                gene_name = (
-                    base_name.split("_")[0]
-                    if "_" in base_name
-                    else base_name.split(".")[0]
-                )
+        for i, path in enumerate(files):
+            name = Path(path).name
+            # Read from the name only. The analysis is confirmed against the
+            # contents of the file during export, which runs off this thread.
+            _, gene, tag = t4_summary_logic.identity_from_json_name(name)
+            model = t4_summary_logic.model_from_json_name(name)
 
-                model_name = "Unknown"
-                name_upper = base_name.upper()
+            for col, text in (
+                (COL_FILE, name),
+                (COL_GENE, gene or "—"),
+                (COL_TAG, tag),
+                (COL_MODEL, model or "read on export"),
+            ):
+                item = QTableWidgetItem(text)
+                item.setToolTip(text)
+                self.status_table.setItem(i, col, item)
 
-                for m in known_models:
-                    if m.upper() in name_upper:
-                        model_name = m if m != "aBSREL" else "aBSREL"
-                        break
+            wrapper, lbl = self.create_status_badge("Ready", *BADGE_READY)
+            self.status_table.setCellWidget(i, COL_STATUS, wrapper)
+            self.file_status_labels[path] = lbl
 
-                if model_name == "Unknown":
-                    try:
-                        with open(f, "r", encoding="utf-8") as json_f:
-                            data = json.load(json_f)
-                            model_info = data.get("analysis", {}).get("info", "")
-                            if model_info:
-                                for m in known_models:
-                                    if m.upper() in model_info.upper():
-                                        model_name = m if m != "aBSREL" else "aBSREL"
-                                        break
-                    except Exception:
-                        pass
-
-                self.status_table.setItem(i, 0, QTableWidgetItem(base_name))
-                self.status_table.setItem(i, 1, QTableWidgetItem(gene_name))
-                self.status_table.setItem(i, 2, QTableWidgetItem(model_name))
-
-                wrapper, lbl = self.create_status_badge("Ready", "#F2F2F7", "#8E8E93")
-                self.status_table.setCellWidget(i, 3, wrapper)
-                self.file_status_labels[f] = lbl
-
-            self.btn_export.setEnabled(True)
-        else:
-            self.btn_export.setEnabled(False)
-
-    def handle_excel_drop(self, files):
-        self.excel_files = files
-        self.log_msg.emit(
-            f"[INFO] Loaded {len(files)} Excel file(s) for visualization."
-        )
+    # ==================================================== excel export
 
     def export_to_excel(self):
         if not self.json_files:
@@ -258,28 +237,23 @@ class Tab4SummaryUI(QWidget):
 
         if not t1_st1_logic.CURRENT_PROJECT_PATH:
             self.log_msg.emit(
-                "[ERROR] No workspace selected.\nSolution: Please set a project workspace in the Dashboard first."
+                "[ERROR] No workspace selected. Set a project workspace in the "
+                "Dashboard first."
             )
             return
 
-        out_dir = t1_st1_logic.CURRENT_PROJECT_PATH / "Results" / "Summary_Reports"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        c_name = self.input_custom_name.text().strip()
+        out_dir = common_utils.get_summary_path(t1_st1_logic.CURRENT_PROJECT_PATH)
 
         self.btn_export.setEnabled(False)
         self.btn_export.set_state("busy", " Processing...")
-
         for lbl in self.file_status_labels.values():
-            lbl.setText("Processing")
-            lbl.setStyleSheet(
-                "background-color: #FFF9E5; color: #FF9500; border-radius: 6px; font-weight: 800; font-size: 11px; padding: 4px 8px;"
-            )
+            self._set_badge(lbl, "Processing", BADGE_BUSY)
 
         self.thread = t4_summary_logic.SummaryExportThread(
-            self.json_files, str(out_dir), c_name
+            self.json_files, str(out_dir), self.input_custom_name.text().strip()
         )
         self.thread.progress_update.connect(self.on_export_progress)
-        self.thread.finished.connect(self.on_export_finished)
+        self.thread.export_done.connect(self.on_export_finished)
         self.thread.start()
 
     def on_export_progress(self, percent, text):
@@ -290,91 +264,59 @@ class Tab4SummaryUI(QWidget):
         self.btn_export.set_state("run", " Export to Excel", "mdi.file-excel")
 
         errors = res.get("errors", [])
-        status = res.get("status")
-        main_msg = res.get("message", "")
-        main_type = res.get("type", "")
-        main_tb = res.get("traceback", "")
+        self._mark_files(errors, res.get("processed", []))
+        self._report_errors(errors)
 
-        def get_solution(err_type):
-            if err_type == "PermissionError":
-                return "Solution: Please close the Excel file and click export again."
-            elif err_type == "ValueError":
-                return "Solution: Double-check that you are only uploading the final JSON result files generated by HyPhy."
-            elif err_type in ["KeyError", "IndexError", "TypeError"]:
-                return "Solution: Re-run the analysis in HyPhy to generate a fresh, complete file."
-            elif err_type == "NoValidData":
-                return "Solution: Make sure your analysis actually finished properly before uploading the files."
-            return "Solution: Please check the detailed error report."
-
-        for f_path, lbl in self.file_status_labels.items():
-            if any(e["file"] == f_path for e in errors):
-                lbl.setText("Error")
-                lbl.setStyleSheet(
-                    "background-color: #FFECEB; color: #FF3B30; border-radius: 6px; font-weight: 800; font-size: 11px; padding: 4px 8px;"
-                )
-            else:
-                lbl.setText("Completed")
-                lbl.setStyleSheet(
-                    "background-color: #E5F0FF; color: #0071E3; border-radius: 6px; font-weight: 800; font-size: 11px; padding: 4px 8px;"
-                )
-
-        if errors and t1_st1_logic.CURRENT_PROJECT_PATH:
-            for err in errors:
-                e_type = err.get("type", "")
-                e_msg = err.get("error", "")
-                e_tb = err.get("traceback", "")
-                solution = get_solution(e_type)
-
-                console_msg = f"Failed to parse {Path(err['file']).name} | [{e_type}] {e_msg}\n{solution}\nTraceback:\n{e_tb}"
-                self.log_msg.emit(f"[ERROR] {console_msg}")
-                common_utils.log_error_to_file(
-                    t1_st1_logic.CURRENT_PROJECT_PATH, "Tab 4: Summary", console_msg
-                )
-
-        if status == "success":
-            self.viz_card.setEnabled(True)
-            self.dz_excel.add_files([res["path"]])
-            self.handle_excel_drop([res["path"]])
-
+        if res.get("status") == "success":
             if errors:
                 self.log_msg.emit(
-                    f"[WARNING] Exported with {len(errors)} error(s). Please check the logs."
+                    f"[WARNING] Report written, but {len(errors)} file(s) could "
+                    "not be read."
                 )
             else:
-                target_folder = str(Path(res["path"]).parent)
-                self.log_msg.emit(
-                    f"[SUCCESS] Excel report exported to: {target_folder}"
-                )
-
-        else:
-            solution = get_solution(main_type)
-            console_msg = f"Failed to export Excel | [{main_type}] {main_msg}\n{solution}\nTraceback:\n{main_tb}"
-            self.log_msg.emit(f"[ERROR] {console_msg}")
-
-            if t1_st1_logic.CURRENT_PROJECT_PATH:
-                common_utils.log_error_to_file(
-                    t1_st1_logic.CURRENT_PROJECT_PATH, "Tab 4: Summary", console_msg
-                )
-
-    def run_visualization(self):
-        if not self.excel_files:
-            self.log_msg.emit("[ERROR] No Excel files loaded for visualization.")
+                self.log_msg.emit(f"[SUCCESS] Report written to: {res['folder']}")
             return
 
-        target_dir = Path(self.excel_files[0]).parent
-        c_name = self.input_custom_name.text().strip()
-
-        self.viz_thread = t4_summary_logic.VisualizationWorker(
-            self.excel_files, str(target_dir), c_name
+        self._log_failure(
+            "Could not write the report",
+            res.get("type", ""),
+            res.get("message", ""),
+            res.get("traceback", ""),
         )
-        self.viz_thread.progress_update.connect(
-            lambda p, m: self.log_msg.emit(f"[Viz] {m}")
-        )
-        self.viz_thread.finished_viz.connect(self.on_viz_finished)
-        self.viz_thread.error_viz.connect(lambda e: self.log_msg.emit(f"[ERROR] {e}"))
-        self.viz_thread.start()
-        self.btn_viz.setEnabled(False)
 
-    def on_viz_finished(self, out_dir):
-        self.log_msg.emit(f"[SUCCESS] SVGs and Source Data saved to: {out_dir}")
-        self.btn_viz.setEnabled(True)
+    def _mark_files(self, errors, processed):
+        failed = {e["file"] for e in errors}
+        read = set(processed)
+        for path, lbl in self.file_status_labels.items():
+            if path in failed:
+                self._set_badge(lbl, "Error", BADGE_ERROR, "See the log for why.")
+            elif path in read:
+                self._set_badge(lbl, "Completed", BADGE_DONE)
+            else:
+                # A repeated run that lost the AIC-c comparison. Its numbers are
+                # still in the AIC columns of the summary sheet.
+                self._set_badge(
+                    lbl,
+                    "Not reported",
+                    BADGE_READY,
+                    "Another run of this analysis fitted better.",
+                )
+
+    def _report_errors(self, errors):
+        for err in errors:
+            self._log_failure(
+                f"Could not read {Path(err['file']).name}",
+                err.get("type", ""),
+                err.get("error", ""),
+                err.get("traceback", ""),
+            )
+
+    def _log_failure(self, headline, err_type, message, tb):
+        solution = SOLUTIONS.get(err_type, DEFAULT_SOLUTION)
+        text = f"{headline} | [{err_type}] {message}\n{solution}"
+        self.log_msg.emit(f"[ERROR] {text}")
+        common_utils.log_error_to_file(
+            t1_st1_logic.CURRENT_PROJECT_PATH,
+            "Tab 4: Summary",
+            f"{text}\nTraceback:\n{tb}",
+        )
