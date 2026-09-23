@@ -4,14 +4,23 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hyphlow"
-version = "1.0.5"
-description = "Bioinformatics selection analysis pipeline and GUI"
+version = "1.0.6"
+description = "A GUI pipeline for phylogenetic selection analysis with HyPhy"
 readme = "README.md"
+license = { text = "MIT" }
 authors = [
     { name = "Hyejung Kwon" },
     { name = "Ryan K Schott" }
 ]
-requires-python = ">=3.8"
+keywords = ["phylogenetics", "selection", "HyPhy", "molecular evolution"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Bioinformatics"
+]
+requires-python = ">=3.10"
 dependencies = [
     "PyQt5",
     "qtawesome",
@@ -20,9 +29,11 @@ dependencies = [
     "rapidfuzz",
     "taxopy",
     "xlsxwriter",
-    "matplotlib",
-    "seaborn"
 ]
+
+[project.urls]
+Github = "https://github.com/Schott-Lab/HYphlow"
+Issues = "https://github.com/Schott-Lab/HYphlow/issues"
 
 [project.scripts]
 hyphlow = "hyphlow.main:main"
@@ -30,5 +41,6 @@ hyphlow = "hyphlow.main:main"
 [tool.setuptools]
 packages = ["hyphlow"]
 
+# data/ holds the organism name list. Without it every species name in a file name reads as a possible gene symbol, and nothing reports that it is missing.
 [tool.setuptools.package-data]
-"hyphlow" = ["assets/*"]
+"hyphlow" = ["assets/*","data/*.txt.gz]
