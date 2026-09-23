@@ -1,72 +1,108 @@
+import html
 import os
 import re
 import sys
 from pathlib import Path
-from datetime import datetime
-from PyQt5.QtWidgets import (
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
-    QFrame,
-    QLabel,
-    QPushButton,
-    QFileDialog,
-    QProgressBar,
-    QScrollArea,
-    QComboBox,
-    QTableWidget,
-    QHeaderView,
-    QTextBrowser,
-    QLineEdit,
-    QSplitter,
-    QLayout,
-    QMessageBox,
-)
+
+import qtawesome as qta
 from PyQt5.QtCore import (
-    Qt,
-    pyqtSignal,
-    QTimer,
-    QPropertyAnimation,
     QPoint,
+    QPropertyAnimation,
     QRect,
     QSize,
+    Qt,
     QTime,
+    QTimer,
     QUrl,
+    pyqtSignal,
 )
 from PyQt5.QtGui import (
     QColor,
+    QDesktopServices,
+    QFont,
     QPainter,
+    QPalette,
     QPen,
     QTextCursor,
-    QFont,
-    QPalette,
-    QDesktopServices,
 )
-import qtawesome as qta
-from hyphlow import common_utils
-from hyphlow import organism_names
-from hyphlow import manifest_logic_tab
-from hyphlow import t1_st1_logic
+from PyQt5.QtWidgets import (
+    QComboBox,
+    QFileDialog,
+    QFrame,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLayout,
+    QLineEdit,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QScrollArea,
+    QSplitter,
+    QTableWidget,
+    QTextBrowser,
+    QVBoxLayout,
+    QWidget,
+)
 
-DOT_GREEN = "#34C759"
-DOT_ORANGE = "#FF9500"
+from hyphlow import common_utils, manifest_logic_tab, t1_st1_logic
 
-# --- design tokens: the only place these values are defined ---
+# ======================================================= design tokens
 INK, INK_MUTED, INK_FAINT = "#1D1D1F", "#515154", "#8E8E93"
 BLUE, GREEN, RED, ORANGE = "#0071E3", "#34C759", "#FF3B30", "#FF9500"
 LINE, SURFACE, SURFACE_ALT = "#E5E5EA", "#FFFFFF", "#F2F2F7"
 
+RED_FILL, GREEN_FILL, ORANGE_FILL = "#FFECEB", "#EBF9EE", "#FFF9E5"
+BLUE_FILL = "#E5F0FF"
+
+# Text on GREEN_FILL. GREEN(#34C759) is the iOS accent and fails contrast
+# on that background.
+GREEN_DARK = "#16A34A"
+
+INK_HOVER, BLUE_HOVER, RED_HOVER = "#333333", "#005BB5", "#D70015"
+ORANGE_HOVER, RED_FILL_HOVER = "#E08600", "#FFD1CE"
+
+FIELD_BG, FIELD_LINE = "#F5F5F7", "#D1D1D6"
+DIM = "#FAFAFA"
+PURPLE = "#5856D6"
+SHADOW = "#C7C7CC"
+YELLOW = "#FFCC00"
+TERMINAL_BG, LOG_TIME = "#000000", "#AEAEB2"
+DROP_H_EMPTY, DROP_H_FILLED, LIST_MAX_H = 120, 60, 180
+CONSOLE_H, CONSOLE_H_WSL = 140, 180
+
+FLAT = "background: transparent; border: none;"
+
 FONT_FAMILY = "-apple-system, 'Segoe UI', Roboto, sans-serif"
-# Same stack for QFont.setFamilies, which Qt resolves against installed fonts.
-# Consolas is Windows-only, Menlo macOS-only, DejaVu Sans Mono ships on Linux.
 FONT_STACK = ["Segoe UI", "Roboto", "DejaVu Sans", "sans-serif"]
 MONO_FAMILY = "Consolas, Menlo, 'DejaVu Sans Mono', 'Courier New', monospace"
 MONO_STACK = ["Consolas", "Menlo", "DejaVu Sans Mono", "Courier New", "monospace"]
 
-
 FS_TITLE, FS_BODY, FS_SMALL, FS_TINY = 16, 14, 13, 11
-RADIUS, RADIUS_CARD = 8, 16
-BTN_HEIGHT = 44
+FS_H1, FS_H2, FS_H3 = 24, 20, 18
+RADIUS_SMALL, RADIUS, RADIUS_CARD = 6, 8, 16
+BTN_HEIGHT, ROW_H = 44, 44
+FS_FIELD = 12
+# Width a file name is elided to in a drop-zone row.
+FILENAME_MAX_W = 200
+ITEM_H, FIELD_H = 42, 28
+
+
+def card(radius=RADIUS_CARD, name=None):
+    sel = f"QFrame#{name}" if name else "QFrame"
+    return (
+        f"{sel} {{ background-color: {SURFACE}; border: 1px solid {LINE};"
+        f" border-radius: {radius}px; }}"
+    )
+
+
+BUTTON_STATES = {
+    "run": (INK, SURFACE, INK_HOVER),
+    "accent": (BLUE, SURFACE, BLUE_HOVER),
+    "stop": (RED, SURFACE, RED_HOVER),
+    "busy": (ORANGE, SURFACE, ORANGE_HOVER),
+    "error": (RED_FILL, RED, RED_FILL_HOVER),
+}
 
 
 def mono_font(size=10):
@@ -77,23 +113,64 @@ def mono_font(size=10):
     return f
 
 
-# state -> (background, foreground, hover). Used by PrimaryButton.set_state.
-BUTTON_STATES = {
-    "run": (INK, "#FFFFFF", "#333333"),
-    "accent": (BLUE, "#FFFFFF", "#005BB5"),
-    "stop": (RED, "#FFFFFF", "#D70015"),
-    "busy": (ORANGE, "#FFFFFF", "#E08600"),
-    "error": ("#FFECEB", RED, "#FFD1CE"),
-}
-
-
 def open_path(path):
-    """Open a file or folder in the OS file manager. Qt handles every platform."""
     QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
 
-# Every role Qt reads. Any role left unset falls through to the desktop theme,
-# which is how dialogs went dark on dark-mode machines.
+def link_button(text, icon_name=None, color=BLUE, hover=None):
+    b = QPushButton(text)
+    if icon_name:
+        b.setIcon(qta.icon(icon_name, color=color))
+    b.setCursor(Qt.PointingHandCursor)
+    sheet = (
+        f"QPushButton {{ font-size: {FS_SMALL}px; font-weight: bold;"
+        f" color: {color}; {FLAT} }}"
+    )
+    if hover:
+        sheet += f"QPushButton:hover {{ color: {hover}; }}"
+    b.setStyleSheet(sheet)
+    return b
+
+
+def caption(text, color=INK_FAINT):
+    lbl = QLabel(text)
+    lbl.setStyleSheet(
+        f"font-size: {FS_TINY}px; font-weight: 800; color: {color}; border: none;"
+    )
+    return lbl
+
+
+TERMINAL_READY = "[SYSTEM] Terminal ready. Waiting for execution..."
+
+LOG_COLORS = {
+    "info": INK_FAINT,
+    "process": BLUE,
+    "success": GREEN,
+    "warning": YELLOW,
+    "error": RED,
+}
+
+# Prefixes people actually type in log messages, mapped onto the five levels.
+LOG_ALIASES = (
+    (("success", "completed"), "success"),
+    (("error", "fail"), "error"),
+    (("warn",), "warning"),
+    (("process", "start"), "process"),
+)
+
+
+def _drop_hint(more=False):
+    what = "more files" if more else "files here"
+    return (
+        f'Drag & drop {what}, or <span style="color: {BLUE};'
+        ' text-decoration: underline;">click to browse</span>'
+    )
+
+
+def _drop_text_css(color=INK):
+    return f"font-size: {FS_BODY}px; font-weight: 600; color: {color}; {FLAT}"
+
+
 _LIGHT_ROLES = {
     "Window": SURFACE,
     "WindowText": INK,
@@ -104,18 +181,20 @@ _LIGHT_ROLES = {
     "Text": INK,
     "Button": SURFACE_ALT,
     "ButtonText": INK,
-    "BrightText": "#FFFFFF",
+    "BrightText": SURFACE,
     "Highlight": BLUE,
-    "HighlightedText": "#FFFFFF",
+    "HighlightedText": SURFACE,
     "PlaceholderText": INK_FAINT,
     "Link": BLUE,
-    "LinkVisited": "#5856D6",
-    "Light": "#FFFFFF",
-    "Midlight": "#FAFAFA",
+    "LinkVisited": PURPLE,
+    "Light": SURFACE,
+    "Midlight": DIM,
     "Mid": LINE,
-    "Dark": "#D1D1D6",
-    "Shadow": "#C7C7CC",
+    "Dark": FIELD_LINE,
+    "Shadow": SHADOW,
 }
+
+
 _DISABLED_ROLES = {
     "WindowText": INK_FAINT,
     "Text": INK_FAINT,
@@ -128,115 +207,87 @@ _DISABLED_ROLES = {
 }
 
 GLOBAL_STYLESHEET = f"""
-QMainWindow, QDialog, QFileDialog, QMessageBox, QInputDialog {{
+QMainWindow, QDialog, QFileDialog, QMessageBox {{
     background-color: {SURFACE};
     color: {INK};
 }}
-/* Qt does not inherit color into child widgets, so name them explicitly. */
-QMessageBox QLabel, QInputDialog QLabel {{ color: {INK}; background: transparent; }}
-QMessageBox QPushButton, QInputDialog QPushButton {{
-    background-color: {SURFACE_ALT}; color: {INK};
-    border: 1px solid #D1D1D6; border-radius: 6px; padding: 6px 16px; min-width: 72px;
+/* Unparented boxes get no ancestor sheet, so these are their only defence.
+   Same values as MESSAGE_BOX_STYLESHEET: a box must not look different for
+   having been built one way rather than the other. */
+QMessageBox QLabel {{ color: {INK}; background: transparent; }}
+QMessageBox QPushButton {{
+    background-color: {FIELD_BG}; color: {INK};
+    border: 1px solid {FIELD_LINE}; border-radius: 6px;
+    padding: 6px 18px; min-width: 72px;
 }}
-QMessageBox QPushButton:hover, QInputDialog QPushButton:hover {{ background-color: #E5E5EA; }}
-QMessageBox QPushButton:default, QInputDialog QPushButton:default {{
-    background-color: {INK}; color: #FFFFFF; border: none;
+QMessageBox QPushButton:hover {{ background-color: {LINE}; }}
+QMessageBox QPushButton:default {{
+    background-color: {INK}; color: {SURFACE}; border: none; font-weight: bold;
 }}
 QToolTip {{ background-color: {SURFACE}; color: {INK}; border: 1px solid {LINE}; padding: 4px; }}
 QMenu {{ background-color: {SURFACE}; color: {INK}; border: 1px solid {LINE}; }}
 QMenu::item:selected {{ background-color: {SURFACE_ALT}; color: {INK}; }}
-QComboBox QAbstractItemView {{
+QComboBox QAbstractItemView{{
     background-color: {SURFACE}; color: {INK};
     selection-background-color: {SURFACE_ALT}; selection-color: {INK};
 }}
-QFileDialog, QFileDialog * {{ background-color: {SURFACE}; color: {INK}; }}
-QFileDialog QTreeView, QFileDialog QListView, QFileDialog QTableView {{
-    background-color: {SURFACE}; color: {INK};
-    selection-background-color: {BLUE}; selection-color: #FFFFFF;
-}}
-QFileDialog QHeaderView::section {{
-    background-color: {SURFACE_ALT}; color: {INK}; border: none;
-    border-right: 1px solid #D1D1D6; border-bottom: 1px solid #D1D1D6; padding: 4px;
-}}
-QFileDialog QComboBox, QFileDialog QLineEdit {{
-    background-color: #F5F5F7; color: {INK};
-    border: 1px solid #D1D1D6; border-radius: 4px; padding: 3px 6px;
-}}
-/* without padding Qt sizes these to the raw text width and the label touches the border */
-QFileDialog QPushButton {{
-    background-color: #F5F5F7; color: {INK};
-    border: 1px solid #D1D1D6; border-radius: 4px;
-    padding: 5px 14px; min-width: 64px;
-}}
-QFileDialog QPushButton:hover {{ background-color: #E5E5EA; }}
-QLabel#MainTitle {{ font-size: 24px; font-weight: 800; color: {INK}; background: transparent; border: none; }}
-QLabel#SectionHeader {{ font-size: 20px; font-weight: 700; color: {INK}; background: transparent; border: none; }}
-QLabel#SubHeader {{ font-size: 18px; font-weight: 500; color: {INK}; background: transparent; border: none; }}
-QLabel#SubText {{ font-size: {FS_BODY}px; font-weight: 400; color: {INK_FAINT}; background: transparent; border: none; }}
-QScrollBar:vertical {{ border: none; background: transparent; width: 8px; margin: 0px; }}
-QScrollBar::handle:vertical {{ background-color: #D1D1D6; border-radius: 4px; min-height: 20px; }}
+QLabel#MainTitle {{ font-size: {FS_H1}px; font-weight: 800; color: {INK}; {FLAT} }}
+QLabel#SectionHeader {{ font-size: {FS_H2}px; font-weight: 700; color: {INK}; {FLAT} }}
+QLabel#SubHeader {{ font-size: {FS_H3}px; font-weight: 500; color: {INK}; {FLAT} }}
+QLabel#SubText {{ font-size: {FS_BODY}px; font-weight: 400; color: {INK_FAINT}; {FLAT} }}
+QScrollBar:vertical {{ {FLAT} width: 8px; margin: 0px; }}
+QScrollBar::handle:vertical {{ background-color: {FIELD_LINE}; border-radius: 4px; min-height: 20px; }}
 QScrollBar::handle:vertical:hover {{ background-color: {INK_FAINT}; }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
-QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ border: none; background: none; height: 0px; }}
-QScrollBar:horizontal {{ border: none; background: transparent; height: 8px; margin: 0px; }}
-QScrollBar::handle:horizontal {{ background-color: #D1D1D6; border-radius: 4px; min-width: 20px; }}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ {FLAT} height: 0px; }}
+QScrollBar:horizontal {{ {FLAT} height: 8px; margin: 0px; }}
+QScrollBar::handle:horizontal {{ background-color: {FIELD_LINE}; border-radius: 4px; min-width: 20px; }}
 QScrollBar::handle:horizontal:hover {{ background-color: {INK_FAINT}; }}
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal,
-QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{ border: none; background: none; width: 0px; }}
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{ {FLAT} width: 0px; }}
 """
 
-
-# Native Win/macOS file dialogs follow the OS theme and ignore our palette, so
-# every picker asks for Qt's own dialog.
-#
-# The dialog is parented into the app, so Qt merges the ANCESTOR widget
-# stylesheets into it - and several app widgets say "background: transparent",
-# which paints the file list black. Ancestor sheets also outrank the application
-# sheet, so GLOBAL_STYLESHEET cannot fix it. A stylesheet on the dialog itself
-# outranks every ancestor, so that is where the colours have to go.
 FILE_DIALOG_STYLESHEET = f"""
 QWidget {{ background-color: {SURFACE}; color: {INK}; }}
 QAbstractItemView {{
     background-color: {SURFACE}; color: {INK};
     alternate-background-color: {SURFACE_ALT}; outline: none;
 }}
-QAbstractItemView::item:selected {{ background-color: {BLUE}; color: #FFFFFF; }}
+QAbstractItemView::item:selected {{ background-color: {BLUE}; color: {SURFACE}; }}
 QHeaderView::section {{
     background-color: {SURFACE_ALT}; color: {INK}; border: none;
-    border-right: 1px solid #D1D1D6; border-bottom: 1px solid #D1D1D6; padding: 4px;
+    border-right: 1px solid {FIELD_LINE}; border-bottom: 1px solid {FIELD_LINE};
+    padding: 4px;
 }}
 QPushButton {{
-    background-color: #F5F5F7; color: {INK}; border: 1px solid #D1D1D6;
+    background-color: {FIELD_BG}; color: {INK}; border: 1px solid {FIELD_LINE};
     border-radius: 4px; padding: 5px 14px; min-width: 64px;
 }}
 QPushButton:hover {{ background-color: {LINE}; }}
 QLineEdit, QComboBox {{
-    background-color: #F5F5F7; color: {INK};
-    border: 1px solid #D1D1D6; border-radius: 4px; padding: 3px 6px;
+    background-color: {FIELD_BG}; color: {INK};
+    border: 1px solid {FIELD_LINE}; border-radius: 4px; padding: 3px 6px;
 }}
 QComboBox QAbstractItemView {{ background-color: {SURFACE}; color: {INK}; }}
-QToolButton {{ background: transparent; border: none; padding: 2px; }}
+QToolButton {{ {FLAT} padding: 2px; }}
 QToolButton:hover {{ background-color: {SURFACE_ALT}; border-radius: 4px; }}
 """
-# Same reason as FILE_DIALOG_STYLESHEET: ancestor stylesheets outrank the
-# application sheet, so the QMessageBox rules in GLOBAL_STYLESHEET never
-# reach a box that is parented into the app.
+
 MESSAGE_BOX_STYLESHEET = f"""
 QMessageBox {{ background-color: {SURFACE}; }}
 QMessageBox QLabel {{ background: transparent; color: {INK}; }}
 QMessageBox QPushButton {{
-    background-color: #F5F5F7; color: {INK}; border: 1px solid #D1D1D6;
+    background-color: {FIELD_BG}; color: {INK}; border: 1px solid {FIELD_LINE};
     border-radius: 6px; padding: 6px 18px; min-width: 72px;
 }}
 QMessageBox QPushButton:hover {{ background-color: {LINE}; }}
 QMessageBox QPushButton:default {{
-    background-color: {INK}; color: #FFFFFF; border: none; font-weight: bold;
+    background-color: {INK}; color: {SURFACE}; border: none; font-weight: bold;
 }}
 """
 
 
 def message_box(parent, icon, title, text):
-    """QMessageBox with the colours set on the dialog itself."""
     box = QMessageBox(parent)
     box.setIcon(icon)
     box.setWindowTitle(title)
@@ -245,42 +296,40 @@ def message_box(parent, icon, title, text):
     return box
 
 
-def _file_dialog(parent, caption, directory, filter_str=""):
-    d = QFileDialog(parent, caption, str(directory or ""), filter_str)
+def _file_dialog(parent, title, directory, filter_str=""):
+    d = QFileDialog(parent, title, str(directory or ""), filter_str)
     d.setOption(QFileDialog.DontUseNativeDialog, True)
     d.setStyleSheet(FILE_DIALOG_STYLESHEET)
     return d
 
 
-def pick_files(parent, caption, directory, filter_str):
-    d = _file_dialog(parent, caption, directory, filter_str)
+def _pick_one(d):
+    picked = d.selectedFiles() if d.exec_() else []
+    return picked[0] if picked else ""
+
+
+def pick_files(parent, title, directory, filter_str):
+    d = _file_dialog(parent, title, directory, filter_str)
     d.setFileMode(QFileDialog.ExistingFiles)
     return d.selectedFiles() if d.exec_() else []
 
 
-def pick_save(parent, caption, directory, filter_str):
-    d = _file_dialog(parent, caption, directory, filter_str)
+def pick_save(parent, title, directory, filter_str):
+    d = _file_dialog(parent, title, directory, filter_str)
     d.setAcceptMode(QFileDialog.AcceptSave)
-    picked = d.selectedFiles() if d.exec_() else []
-    return picked[0] if picked else ""
+    return _pick_one(d)
 
 
-def pick_dir(parent, caption, directory=""):
-    d = _file_dialog(parent, caption, directory)
+def pick_dir(parent, title, directory=""):
+    d = _file_dialog(parent, title, directory)
     d.setFileMode(QFileDialog.Directory)
     d.setOption(QFileDialog.ShowDirsOnly, True)
-    picked = d.selectedFiles() if d.exec_() else []
-    return picked[0] if picked else ""
+    return _pick_one(d)
 
 
 def force_light_env():
-    """Neutralise OS theme hooks. MUST run before QApplication is constructed.
-
-    Qt reads these at startup, so setting them later has no effect:
-      QT_STYLE_OVERRIDE     e.g. Adwaita-Dark, applied before our setStyle runs
-      QT_QPA_PLATFORMTHEME  gtk3/kde plugins hand Qt the desktop's dark palette
-      windows:darkmode      Qt >=5.15 paints dark title bars and frames
-    """
+    # MUST run before QApplication is constructed - Qt reads these at startup,
+    # so setting them later has no effect.
     os.environ.pop("QT_STYLE_OVERRIDE", None)
     os.environ.pop("QT_QPA_PLATFORMTHEME", None)
     if sys.platform == "win32" and "QT_QPA_PLATFORM" not in os.environ:
@@ -288,13 +337,8 @@ def force_light_env():
 
 
 def apply_light_theme(app):
-    """Force light mode regardless of the OS theme.
-
-    Fusion is used because the native Windows/macOS styles paint from the system
-    theme and ignore a custom palette.
-    """
+    # Fusion: native Win/macOS styles ignore a custom palette.
     app.setStyle("Fusion")
-
     base_font = QFont()
     base_font.setFamilies(FONT_STACK)
     base_font.setPixelSize(FS_BODY)
@@ -316,11 +360,6 @@ class FlowLayout(QLayout):
         self.setContentsMargins(margin, margin, margin, margin)
         self.setSpacing(spacing)
         self.itemList = []
-
-    def __del__(self):
-        item = self.takeAt(0)
-        while item:
-            item = self.takeAt(0)
 
     def addItem(self, item):
         self.itemList.append(item)
@@ -388,8 +427,6 @@ class FlowContainer(QWidget):
 
 
 class PrimaryButton(QPushButton):
-    """The one primary action button. Tabs change state via set_state, never CSS."""
-
     def __init__(self, text, icon_name=None):
         super().__init__(text)
         self.setFixedHeight(BTN_HEIGHT)
@@ -418,8 +455,6 @@ class PrimaryButton(QPushButton):
 
 
 class ActionButton(PrimaryButton):
-    """Secondary action. Same geometry and type scale as PrimaryButton, blue fill."""
-
     def __init__(self, text, icon_name, is_danger=False):
         super().__init__(text, icon_name)
         self.set_state("stop" if is_danger else "accent")
@@ -431,13 +466,17 @@ class StandardTable(QTableWidget):
         self.setHorizontalHeaderLabels(headers)
         self.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.verticalHeader().setVisible(False)
-        self.verticalHeader().setDefaultSectionSize(44)
+        self.verticalHeader().setDefaultSectionSize(ROW_H)
         self.setShowGrid(False)
         self.setFocusPolicy(Qt.NoFocus)
-        self.setStyleSheet("""
-            QTableWidget { border: 1px solid #E5E5EA; border-radius: 8px; background-color: #FFFFFF; outline: none; }
-            QTableWidget::item { padding: 8px; border-bottom: 1px solid #F2F2F7; font-size: 14px; color: #1D1D1F; }
-            QHeaderView::section { background-color: #FAFAFA; border: none; border-bottom: 1px solid #E5E5EA; font-size: 13px; font-weight: bold; color: #8E8E93; height: 36px; }
+        self.setStyleSheet(f"""
+            QTableWidget {{ border: 1px solid {LINE}; border-radius: {RADIUS}px;
+                background-color: {SURFACE}; outline: none; }}
+            QTableWidget::item {{ padding: 8px; border-bottom: 1px solid {SURFACE_ALT};
+                font-size: {FS_BODY}px; color: {INK}; }}
+            QHeaderView::section {{ background-color: {DIM}; border: none;
+                border-bottom: 1px solid {LINE}; font-size: {FS_SMALL}px;
+                font-weight: bold; color: {INK_FAINT}; height: 36px; }}
         """)
 
 
@@ -453,19 +492,32 @@ class CustomTableCheckBox(QLabel):
         self.update_state()
 
     def update_state(self):
-        if self.is_checked:
-            self.setStyleSheet(
-                "background-color: #0071E3; border-radius: 4px; border: 2px solid #0071E3;"
-            )
-            self.setPixmap(qta.icon("mdi.check", color="white").pixmap(14, 14))
+        if not self.isEnabled():
+            # INK_FAINT, not LINE: a tick in LINE on SURFACE_ALT is the same
+            # grey as its background, so a disabled-but-checked box reads as
+            # unchecked.
+            fill, edge, tick = SURFACE_ALT, LINE, INK_FAINT
+        elif self.is_checked:
+            fill, edge, tick = BLUE, BLUE, SURFACE
         else:
-            self.setStyleSheet(
-                "background-color: #FFFFFF; border-radius: 4px; border: 2px solid #8E8E93;"
-            )
+            fill, edge, tick = SURFACE, INK_FAINT, None
+
+        self.setStyleSheet(
+            f"background-color: {fill}; border-radius: 4px; border: 2px solid {edge};"
+        )
+        if tick and self.is_checked:
+            self.setPixmap(qta.icon("mdi.check", color=tick).pixmap(14, 14))
+        else:
             self.clear()
 
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        # PyQt6 moves this to QEvent.Type.EnabledChange.
+        if event.type() == event.EnabledChange:
+            self.update_state()
+
     def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
+        if self.isEnabled() and event.button() == Qt.LeftButton:
             self.is_checked = not self.is_checked
             self.update_state()
             self.toggled.emit(self.is_checked)
@@ -475,7 +527,7 @@ class TableCheckBoxWidget(QWidget):
     def __init__(self, checked=True):
         super().__init__()
         self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setStyleSheet("background: transparent; border: none;")
+        self.setStyleSheet(FLAT)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setAlignment(Qt.AlignCenter)
@@ -501,13 +553,14 @@ class FileItemWidget(QFrame):
     ):
         super().__init__()
         self.file_path = file_path
-        self.filename = os.path.basename(file_path)
+        self.filename = Path(file_path).name
         self.file_type = file_type.lower()
         self.strict_gene_parse = strict_gene_parse
         self.setStyleSheet(
-            "QFrame { background-color: #F5F5F7; border: none; border-radius: 6px; }"
+            f"QFrame {{ background-color: {FIELD_BG}; border: none;"
+            f" border-radius: 6px; }}"
         )
-        self.setFixedHeight(42)
+        self.setFixedHeight(ITEM_H)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 4, 12, 4)
@@ -516,85 +569,43 @@ class FileItemWidget(QFrame):
         top_layout = QHBoxLayout()
         top_layout.setContentsMargins(0, 0, 0, 0)
         top_layout.setAlignment(Qt.AlignVCenter)
+
         self.status_dot = QLabel()
         self.status_dot.setFixedSize(9, 9)
         top_layout.addWidget(self.status_dot)
+
         icon_lbl = QLabel()
         icon_lbl.setPixmap(
-            qta.icon("mdi.file-document-outline", color="#515154").pixmap(18, 18)
+            qta.icon("mdi.file-document-outline", color=INK_MUTED).pixmap(18, 18)
         )
         top_layout.addWidget(icon_lbl)
 
         name_lbl = QLabel(self.filename)
         name_lbl.setStyleSheet(
-            "font-size: 13px; font-weight: 500; color: #1D1D1F; padding-right: 10px; border: none;"
+            f"font-size: {FS_SMALL}px; font-weight: 500; color: {INK};"
+            " padding-right: 10px; border: none;"
         )
-
-        metrics = name_lbl.fontMetrics()
-        elided = metrics.elidedText(self.filename, Qt.ElideMiddle, 200)
-        name_lbl.setText(elided)
+        name_lbl.setText(
+            name_lbl.fontMetrics().elidedText(
+                self.filename, Qt.ElideMiddle, FILENAME_MAX_W
+            )
+        )
         top_layout.addWidget(name_lbl)
         top_layout.addStretch()
 
         if self.file_type == "csv":
-            self.combo_lbl = QLabel("Species column:")
-            self.combo_lbl.setStyleSheet(
-                "font-size: 12px; font-weight: 600; color: #515154; border: none;"
-            )
-            self.combo_lbl.setVisible(show_dropdown)
-            top_layout.addWidget(self.combo_lbl)
-
-            self.combo = QComboBox()
-            self.combo.setFixedHeight(28)
-            self.combo.setMinimumWidth(130)
-            self.combo.setStyleSheet("""
-                QComboBox { border: 1px solid #D1D1D6; border-radius: 6px; padding: 2px 10px; font-size: 12px; background: white; color: #1D1D1F; }
-                QComboBox::drop-down { border: none; }
-            """)
-            self.combo.setVisible(show_dropdown)
-            top_layout.addWidget(self.combo)
-
+            self._build_column_picker(top_layout, show_dropdown)
         elif show_gene_input:
-            LABEL_CSS = (
-                "font-size: 11px; font-weight: 800; color: #0071E3; border: none;"
-            )
-            FIELD_CSS = """
-                QLineEdit { border: 1px solid #0071E3; border-radius: 6px; padding: 2px 8px; font-size: 12px; font-weight: bold; background: white; color: #1D1D1F; }
-                QLineEdit:focus { border: 2px solid #005BB5; }
-            """
-
-            self.org_lbl = QLabel("ORG")
-            self.org_lbl.setStyleSheet(LABEL_CSS)
-            top_layout.addWidget(self.org_lbl)
-
-            self.org_input = QLineEdit()
-            self.org_input.setFixedHeight(28)
-            self.org_input.setFixedWidth(95)
-            self.org_input.setPlaceholderText("organism")
-            self.org_input.setStyleSheet(FIELD_CSS)
-            self.org_input.setText(self._guess_organism())
-            top_layout.addWidget(self.org_input)
-
-            self.gene_lbl = QLabel("GENE")
-            self.gene_lbl.setStyleSheet(LABEL_CSS)
-            top_layout.addWidget(self.gene_lbl)
-
-            self.gene_input = QLineEdit()
-            self.gene_input.setFixedHeight(28)
-            self.gene_input.setFixedWidth(80)
-            self.gene_input.setPlaceholderText("gene")
-            self.gene_input.setStyleSheet(FIELD_CSS)
-            self.gene_input.setText(self._guess_gene())
-            top_layout.addWidget(self.gene_input)
-            self.org_input.textChanged.connect(self._refresh_dot)
-            self.gene_input.textChanged.connect(self._refresh_dot)
+            self._build_identity_inputs(top_layout)
 
         del_btn = QPushButton()
-        del_btn.setIcon(qta.icon("mdi.close", color="#8E8E93"))
+        del_btn.setIcon(qta.icon("mdi.close", color=INK_FAINT))
         del_btn.setFixedSize(26, 26)
         del_btn.setCursor(Qt.PointingHandCursor)
         del_btn.setStyleSheet(
-            "QPushButton { border: none; border-radius: 13px; background: transparent; } QPushButton:hover { background-color: #E5E5EA; }"
+            f"QPushButton {{ border: none; border-radius: 13px;"
+            f" background: transparent; }}"
+            f"QPushButton:hover {{ background-color: {LINE}; }}"
         )
         del_btn.clicked.connect(lambda: self.remove_requested.emit(self.file_path))
         top_layout.addWidget(del_btn)
@@ -605,56 +616,101 @@ class FileItemWidget(QFrame):
         self.pbar.setFixedHeight(4)
         self.pbar.setTextVisible(False)
         self.pbar.setStyleSheet(
-            "QProgressBar { background-color: transparent; border: none; } QProgressBar::chunk { background-color: #34C759; border-radius: 2px; }"
+            f"QProgressBar {{ {FLAT} }}"
+            f"QProgressBar::chunk {{ background-color: {GREEN};"
+            f" border-radius: 2px; }}"
         )
         self.pbar.hide()
         layout.addWidget(self.pbar)
         self._refresh_dot()
 
+    def _build_column_picker(self, row, visible):
+        self.combo_lbl = QLabel("Species column:")
+        self.combo_lbl.setStyleSheet(
+            f"font-size: {FS_FIELD}px; font-weight: 600; color: {INK_MUTED};"
+            " border: none;"
+        )
+        self.combo_lbl.setVisible(visible)
+        row.addWidget(self.combo_lbl)
+
+        self.combo = QComboBox()
+        self.combo.setFixedHeight(FIELD_H)
+        self.combo.setMinimumWidth(130)
+        self.combo.setStyleSheet(
+            f"QComboBox {{ border: 1px solid {FIELD_LINE}; border-radius: 6px;"
+            f" padding: 2px 10px; font-size: {FS_FIELD}px;"
+            f" background: {SURFACE}; color: {INK}; }}"
+            f"QComboBox::drop-down {{ border:none; }}"
+        )
+        self.combo.setVisible(visible)
+        row.addWidget(self.combo)
+
+    def _build_identity_inputs(self, row):
+        label_css = (
+            f"font-size: {FS_TINY}px; font-weight: 800; color: {BLUE}; border: none;"
+        )
+        field_css = (
+            f"QLineEdit {{ border: 1px solid {BLUE}; border-radius: 6px;"
+            f" padding: 2px 8px; font-size: {FS_FIELD}px; font-weight: bold;"
+            f" background: {SURFACE}; color: {INK}; }}"
+            f"QLineEdit:focus {{ border: 2px solid {BLUE_HOVER}; }}"
+        )
+
+        org, gene = self._guess_identity()
+        for attr, text, width, placeholder, value in (
+            ("org", "ORG", 95, "organism", org),
+            ("gene", "GENE", 80, "gene", gene),
+        ):
+            lbl = QLabel(text)
+            lbl.setStyleSheet(label_css)
+            row.addWidget(lbl)
+            setattr(self, f"{attr}_lbl", lbl)
+
+            field = QLineEdit()
+            field.setFixedHeight(FIELD_H)
+            field.setFixedWidth(width)
+            field.setPlaceholderText(placeholder)
+            field.setStyleSheet(field_css)
+            field.setText(value)
+            field.textChanged.connect(self._refresh_dot)
+            row.addWidget(field)
+            setattr(self, f"{attr}_input", field)
+
     def set_headers(self, headers):
-        if hasattr(self, "combo"):
-            current = self.combo.currentText()
-            self.combo.clear()
-            self.combo.addItems(headers)
-            for h in headers:
-                if "species" in h.lower() or "taxon" in h.lower():
-                    self.combo.setCurrentText(h)
-                    break
-            else:
-                if current in headers:
-                    self.combo.setCurrentText(current)
+        if not hasattr(self, "combo"):
+            return
+        current = self.combo.currentText()
+        self.combo.clear()
+        self.combo.addItems(headers)
+        for h in headers:
+            if "species" in h.lower() or "taxon" in h.lower():
+                self.combo.setCurrentText(h)
+                return
+        if current in headers:
+            self.combo.setCurrentText(current)
 
     def _name_tokens(self):
-        stem = os.path.splitext(self.filename)[0]
-        return [p for p in re.split(r"[^A-Za-z0-9]+", stem) if p]
+        return [p for p in re.split(r"[^A-Za-z0-9]+", Path(self.filename).stem) if p]
 
-    def _guess_organism(self):
-
-        known = set()
-        try:
-            proj = t1_st1_logic.CURRENT_PROJECT_PATH
-            if proj:
-                known = manifest_logic_tab.known_values(proj, "organism")
-        except Exception:
-            pass
-
-        for token in self._name_tokens():
-            if token.lower() in known:
-                return token
-            if organism_names.looks_like_organism(token):
-                return token
-        return ""
-
-    def _guess_gene(self):
-        if self.strict_gene_parse:
-            return common_utils.detect_gene_from_file(self.file_path)
-        parts = self._name_tokens()
-        return parts[1].upper() if len(parts) > 1 else ""
+    # The manifest already holds what Tab 1 and Tab 2 recorded for a file, so
+    # ask it first and fall back to the name only when it has nothing.
+    def _guess_identity(self):
+        org, gene = manifest_logic_tab.resolve_identity(
+            t1_st1_logic.CURRENT_PROJECT_PATH, self.file_path
+        )
+        if not self.strict_gene_parse:
+            # Pruning reads raw sequence files, where the headers carry
+            # identifiers that outnumber the gene symbol. The name the user
+            # typed is the more reliable source there.
+            parts = self._name_tokens()
+            gene = parts[1].upper() if len(parts) > 1 else ""
+        return org, gene
 
     def get_organism(self):
-        if hasattr(self, "org_input"):
-            return self.org_input.text().strip()
-        return ""
+        return self.org_input.text().strip() if hasattr(self, "org_input") else ""
+
+    def get_gene_name(self):
+        return self.gene_input.text().strip() if hasattr(self, "gene_input") else ""
 
     def get_identity(self):
         return self.get_organism(), self.get_gene_name()
@@ -665,30 +721,28 @@ class FileItemWidget(QFrame):
         return bool(self.get_organism()) and bool(self.get_gene_name())
 
     def _refresh_dot(self):
-        if not hasattr(self, "status_dot"):
-            return
         if not hasattr(self, "gene_input"):
             self.status_dot.hide()
             return
         ok = self.is_complete()
         self.status_dot.setStyleSheet(
-            "background-color: %s; border-radius: 4px; border: none;"
-            % (DOT_GREEN if ok else DOT_ORANGE)
+            f"background-color: {GREEN if ok else ORANGE};"
+            " border-radius: 4px; border: none;"
         )
         self.status_dot.setToolTip("ready" if ok else "organism or gene is missing")
 
-    def get_gene_name(self):
-        if hasattr(self, "gene_input"):
-            return self.gene_input.text().strip()
-        return ""
-
+    # val 0 means the step has started but cannot say how far along it is.
     def update_progress(self, val):
         self.pbar.show()
-        if self.pbar.maximum() == 0 and val == 0:
+        if val == 0:
             self.pbar.setRange(0, 0)
         else:
             self.pbar.setRange(0, 100)
             self.pbar.setValue(val)
+
+    def finish_progress(self):
+        self.pbar.setRange(0, 100)
+        self.pbar.hide()
 
 
 class UnifiedDropZone(QWidget):
@@ -712,129 +766,110 @@ class UnifiedDropZone(QWidget):
         self.show_gene_input = show_gene_input
         self.open_in_base_dir = open_in_base_dir
         self.strict_gene_parse = strict_gene_parse
-        # path parts under the project root to open the browser in, e.g.
+        # path parts under the project root to open the browser in e.g.
         # ("Results", "Tree_Annotation"). Falls back to the file_type pipeline dir.
         self.default_subdir = default_subdir
         self.current_files = []
         self.item_widgets = {}
+        self.is_drag_hover = False
+        self.is_error = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
+        layout.addWidget(self._build_drop_area(format_text))
+        layout.addWidget(self._build_toolbar())
+        layout.addWidget(self._build_list())
 
+    def _build_drop_area(self, format_text):
         self.drop_area = QFrame()
         self.drop_area.setAcceptDrops(True)
         self.drop_area.setCursor(Qt.PointingHandCursor)
-        self.drop_area.setFixedHeight(120)
-        self.drop_area.setStyleSheet(
-            "QFrame { border: none; background: transparent; }"
-        )
+        self.drop_area.setFixedHeight(DROP_H_EMPTY)
+        self.drop_area.setStyleSheet(f"QFrame {{ {FLAT} }}")
 
-        drop_layout = QVBoxLayout(self.drop_area)
-        drop_layout.setAlignment(Qt.AlignCenter)
-        drop_layout.setSpacing(8)
+        col = QVBoxLayout(self.drop_area)
+        col.setAlignment(Qt.AlignCenter)
+        col.setSpacing(8)
 
         self.upload_icon = QLabel()
         self.upload_icon.setPixmap(
-            qta.icon("fa5s.upload", color="#98989D").pixmap(26, 26)
+            qta.icon("fa5s.upload", color=INK_FAINT).pixmap(26, 26)
         )
         self.upload_icon.setAlignment(Qt.AlignCenter)
-        self.upload_icon.setStyleSheet("border: none; background: transparent;")
-        drop_layout.addWidget(self.upload_icon)
+        self.upload_icon.setStyleSheet(FLAT)
+        col.addWidget(self.upload_icon)
 
-        self.main_text = QLabel(
-            'Drag & drop files here, or <span style="color: #0071E3; text-decoration: underline;">click to browse</span>'
-        )
-        self.main_text.setStyleSheet(
-            "font-size: 14px; font-weight: 600; color: #1D1D1F; border: none; background: transparent;"
-        )
+        self.main_text = QLabel(_drop_hint())
+        self.main_text.setStyleSheet(_drop_text_css())
         self.main_text.setAlignment(Qt.AlignCenter)
-        drop_layout.addWidget(self.main_text)
+        col.addWidget(self.main_text)
 
         self.sub_text = QLabel(format_text)
         self.sub_text.setStyleSheet(
-            "font-size: 13px; color: #8E8E93; border: none; background: transparent;"
+            f"font-size: {FS_SMALL}px; color: {INK_FAINT}; {FLAT}"
         )
         self.sub_text.setAlignment(Qt.AlignCenter)
-        drop_layout.addWidget(self.sub_text)
+        col.addWidget(self.sub_text)
 
         self.drop_area.paintEvent = self._paint_drop_area
         self.drop_area.dragEnterEvent = self._drag_enter
         self.drop_area.dragLeaveEvent = self._drag_leave
         self.drop_area.dropEvent = self._drop
         self.drop_area.mousePressEvent = self._mouse_press
-        layout.addWidget(self.drop_area)
+        return self.drop_area
 
+    def _build_toolbar(self):
         self.list_toolbar = QFrame()
-        self.list_toolbar.setStyleSheet(
-            "QFrame { border: none; background: transparent; }"
-        )
+        self.list_toolbar.setStyleSheet(f"QFrame {{ {FLAT} }}")
         self.list_toolbar.hide()
-        toolbar_layout = QHBoxLayout(self.list_toolbar)
-        toolbar_layout.setContentsMargins(4, 0, 4, 0)
+
+        row = QHBoxLayout(self.list_toolbar)
+        row.setContentsMargins(4, 0, 4, 0)
 
         self.file_count_lbl = QLabel()
         self.file_count_lbl.setStyleSheet(
-            "font-size: 13px; font-weight: bold; color: #515154; border: none; background: transparent;"
+            f"font-size: {FS_SMALL}px; font-weight: bold; color: {INK_MUTED}; {FLAT}"
         )
-        toolbar_layout.addWidget(self.file_count_lbl)
-        toolbar_layout.addStretch()
+        row.addWidget(self.file_count_lbl)
+        row.addStretch()
 
-        self.add_more_btn = QPushButton(" Add files")
-        self.add_more_btn.setIcon(qta.icon("mdi.plus", color="#0071E3"))
-        self.add_more_btn.setCursor(Qt.PointingHandCursor)
-        self.add_more_btn.setStyleSheet(
-            "QPushButton { font-weight: bold; color: #0071E3; border: none; background: transparent; }"
-        )
+        self.add_more_btn = link_button(" Add files", "mdi.plus")
         self.add_more_btn.clicked.connect(self._open_file_dialog)
-        toolbar_layout.addWidget(self.add_more_btn)
+        row.addWidget(self.add_more_btn)
 
-        self.clear_all_btn = QPushButton(" Clear all")
-        self.clear_all_btn.setIcon(qta.icon("mdi.delete-outline", color="#FF3B30"))
-        self.clear_all_btn.setCursor(Qt.PointingHandCursor)
-        self.clear_all_btn.setStyleSheet(
-            "QPushButton { font-weight: bold; color: #FF3B30; border: none; background: transparent; }"
-        )
+        self.clear_all_btn = link_button(" Clear all", "mdi.delete-outline", RED)
         self.clear_all_btn.clicked.connect(self.clear_all)
-        toolbar_layout.addWidget(self.clear_all_btn)
+        row.addWidget(self.clear_all_btn)
+        return self.list_toolbar
 
-        layout.addWidget(self.list_toolbar)
-
+    def _build_list(self):
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
-        self.scroll_area.setStyleSheet(
-            "QScrollArea { border: none; background: transparent; }"
-        )
+        self.scroll_area.setStyleSheet(f"QScrollArea {{ {FLAT} }}")
         self.scroll_area.hide()
+
         self.list_container = QWidget()
         self.list_layout = QVBoxLayout(self.list_container)
         self.list_layout.setContentsMargins(0, 0, 0, 0)
         self.list_layout.setSpacing(8)
         self.list_layout.setAlignment(Qt.AlignTop)
         self.scroll_area.setWidget(self.list_container)
-        layout.addWidget(self.scroll_area)
-
-        self.is_drag_hover = False
-        self.is_error = False
+        return self.scroll_area
 
     def _paint_drop_area(self, event):
         painter = QPainter(self.drop_area)
         painter.setRenderHint(QPainter.Antialiasing)
         if self.is_error:
-            pen = QPen(QColor("#FF3B30"), 2, Qt.DashLine)
-            bg_color = QColor("#FFF0F0")
+            pen, fill = QPen(QColor(RED), 2, Qt.DashLine), QColor(RED_FILL)
         elif self.is_drag_hover:
-            pen = QPen(QColor("#0071E3"), 2, Qt.SolidLine)
-            bg_color = QColor("#E5F0FF")
+            pen, fill = QPen(QColor(BLUE), 2, Qt.SolidLine), QColor(BLUE_FILL)
+        elif self.current_files:
+            pen, fill = QPen(Qt.NoPen), QColor(DIM)
         else:
-            if self.current_files:
-                pen = QPen(Qt.NoPen)
-                bg_color = QColor("#FAFAFA")
-            else:
-                pen = QPen(QColor("#D1D1D6"), 2, Qt.DashLine)
-                bg_color = QColor("#FAFAFA")
+            pen, fill = QPen(QColor(FIELD_LINE), 2, Qt.DashLine), QColor(DIM)
         painter.setPen(pen)
-        painter.setBrush(bg_color)
+        painter.setBrush(fill)
         painter.drawRoundedRect(self.drop_area.rect().adjusted(2, 2, -2, -2), 10, 10)
 
     def _drag_enter(self, event):
@@ -853,15 +888,15 @@ class UnifiedDropZone(QWidget):
         self.is_drag_hover = False
         self.drop_area.update()
         files = [u.toLocalFile() for u in event.mimeData().urls()]
-        valid_files = [
+        valid = [
             f
             for f in files
             if any(f.lower().endswith(ext) for ext in self.supported_exts)
         ]
-        if len(valid_files) != len(files):
+        if len(valid) != len(files):
             self._trigger_error()
-        if valid_files:
-            self.add_files(valid_files)
+        if valid:
+            self.add_files(valid)
 
     def _mouse_press(self, event):
         if event.button() == Qt.LeftButton:
@@ -869,22 +904,26 @@ class UnifiedDropZone(QWidget):
 
     def _open_file_dialog(self):
         default_dir = ""
-        try:
-            proj = getattr(t1_st1_logic, "CURRENT_PROJECT_PATH", None)
-            if proj:
-                default_dir = str(proj)
+        proj = t1_st1_logic.CURRENT_PROJECT_PATH
+        if proj:
+            default_dir = str(proj)
+            try:
                 if self.default_subdir:
                     p = Path(proj).joinpath(*self.default_subdir)
-                    if p.exists():
-                        default_dir = str(p)
-                elif not self.open_in_base_dir:
-                    p = common_utils.get_pipeline_path(proj, "Results", self.file_type)
-                    if p and p.exists():
-                        default_dir = str(p)
-        except Exception:
-            default_dir = ""
+                elif self.open_in_base_dir:
+                    p = None
+                else:
+                    p = common_utils.get_pipeline_path(
+                        proj, common_utils.RESULTS, self.file_type
+                    )
+                if p and p.exists():
+                    default_dir = str(p)
+            except OSError:
+                # An unreachable folder just means the dialog opens at the
+                # project root instead.
+                pass
 
-        filter_str = " ".join([f"*{ext}" for ext in self.supported_exts])
+        filter_str = " ".join(f"*{ext}" for ext in self.supported_exts)
         files = pick_files(
             self, "Select Files", default_dir, f"Supported Files ({filter_str})"
         )
@@ -894,301 +933,234 @@ class UnifiedDropZone(QWidget):
     def _trigger_error(self):
         self.is_error = True
         self.main_text.setText("Unsupported file format!")
-        self.main_text.setStyleSheet(
-            "font-size: 14px; font-weight: 600; color: #FF3B30; border: none; background: transparent;"
-        )
+        self.main_text.setStyleSheet(_drop_text_css(RED))
         self.drop_area.update()
+
         self.shake_anim = QPropertyAnimation(self.drop_area, b"pos")
         self.shake_anim.setDuration(400)
-        orig_pos = self.drop_area.pos()
-        self.shake_anim.setKeyValueAt(0.0, orig_pos)
-        self.shake_anim.setKeyValueAt(0.2, orig_pos + QPoint(4, 0))
-        self.shake_anim.setKeyValueAt(0.4, orig_pos - QPoint(4, 0))
-        self.shake_anim.setKeyValueAt(0.6, orig_pos + QPoint(2, 0))
-        self.shake_anim.setKeyValueAt(0.8, orig_pos - QPoint(2, 0))
-        self.shake_anim.setKeyValueAt(1.0, orig_pos)
+        origin = self.drop_area.pos()
+        for at, dx in ((0.0, 0), (0.2, 4), (0.4, -4), (0.6, 2), (0.8, -2), (1.0, 0)):
+            self.shake_anim.setKeyValueAt(at, origin + QPoint(dx, 0))
         self.shake_anim.start()
         QTimer.singleShot(1500, self._reset_error_state)
 
     def _reset_error_state(self):
         self.is_error = False
+        self.main_text.setStyleSheet(_drop_text_css())
+        # Only the wording and the border go back: the file list never changed,
+        # so listeners must not be told it did.
+        self.main_text.setText(_drop_hint(more=bool(self.current_files)))
         self.drop_area.update()
-        self._update_ui_state()
 
     def add_files(self, new_files):
         for f in new_files:
-            if f not in self.current_files:
-                self.current_files.append(f)
-                item = FileItemWidget(
-                    f,
-                    show_dropdown=self.show_dropdown,
-                    file_type=self.file_type,
-                    show_gene_input=self.show_gene_input,
-                    strict_gene_parse=self.strict_gene_parse,
-                )
-                item.remove_requested.connect(self.remove_file)
-                self.item_widgets[f] = item
-                self.list_layout.addWidget(item)
+            if f in self.current_files:
+                continue
+            self.current_files.append(f)
+            item = FileItemWidget(
+                f,
+                show_dropdown=self.show_dropdown,
+                file_type=self.file_type,
+                show_gene_input=self.show_gene_input,
+                strict_gene_parse=self.strict_gene_parse,
+            )
+            item.remove_requested.connect(self.remove_file)
+            self.item_widgets[f] = item
+            self.list_layout.addWidget(item)
         self._update_ui_state()
-
-    def get_all_genes(self):
-        return {f: widget.get_gene_name() for f, widget in self.item_widgets.items()}
 
     def get_all_identities(self):
         return {f: w.get_identity() for f, w in self.item_widgets.items()}
 
     def remove_file(self, file_path):
-        if file_path in self.current_files:
-            self.current_files.remove(file_path)
-            item = self.item_widgets.pop(file_path)
-            self.list_layout.removeWidget(item)
-            item.deleteLater()
-            self._update_ui_state()
+        if file_path not in self.current_files:
+            return
+        self.current_files.remove(file_path)
+        item = self.item_widgets.pop(file_path)
+        self.list_layout.removeWidget(item)
+        item.deleteLater()
+        self._update_ui_state()
 
     def clear_all(self):
-        for f in list(self.current_files):
-            self.remove_file(f)
+        # One pass, one update: remove_file per file would rebuild every
+        # listening tab's table once per file.
+        for item in self.item_widgets.values():
+            self.list_layout.removeWidget(item)
+            item.deleteLater()
+        self.current_files.clear()
+        self.item_widgets.clear()
+        self._update_ui_state()
 
     def update_file_progress(self, file_path, val):
         if file_path in self.item_widgets:
             self.item_widgets[file_path].update_progress(val)
 
+    def finish_file_progress(self, file_path=None):
+        targets = (
+            self.item_widgets.values()
+            if file_path is None
+            else (
+                [self.item_widgets[file_path]] if file_path in self.item_widgets else []
+            )
+        )
+        for item in targets:
+            item.finish_progress()
+
     def _update_ui_state(self):
-        if self.current_files:
-            self.drop_area.setFixedHeight(60)
-            self.upload_icon.hide()
-            self.sub_text.hide()
-            self.main_text.setText(
-                'Drag & drop more files, or <span style="color: #0071E3; text-decoration: underline;">click to browse</span>'
-            )
+        filled = bool(self.current_files)
+        self.drop_area.setFixedHeight(DROP_H_FILLED if filled else DROP_H_EMPTY)
+        self.upload_icon.setVisible(not filled)
+        self.sub_text.setVisible(not filled)
+        self.main_text.setText(_drop_hint(more=filled))
+        self.list_toolbar.setVisible(filled)
+        self.scroll_area.setVisible(filled)
+
+        if filled:
             self.file_count_lbl.setText(f"{len(self.current_files)} File(s) added")
-            self.list_toolbar.show()
-            self.scroll_area.show()
-
-            item_h = 42
-            spacing = self.list_layout.spacing()
-            calc_h = (item_h + spacing) * len(self.current_files)
-            self.scroll_area.setFixedHeight(min(calc_h, 180))
-
-        else:
-            self.drop_area.setFixedHeight(120)
-            self.upload_icon.show()
-            self.sub_text.show()
-            self.main_text.setText(
-                'Drag & drop files here, or <span style="color: #0071E3; text-decoration: underline;">click to browse</span>'
+            row_h = ITEM_H + self.list_layout.spacing()
+            self.scroll_area.setFixedHeight(
+                min(row_h * len(self.current_files), LIST_MAX_H)
             )
-            self.list_toolbar.hide()
-            self.scroll_area.hide()
+
         self.drop_area.update()
-        self.files_updated.emit(self.current_files)
+        # A copy, not the list itself: receivers keep what they are handed, and
+        # a worker thread reading it must not see Clear all empty it mid-run.
+        self.files_updated.emit(list(self.current_files))
 
 
 class LogConsole(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("LogConsole")
-        self.setFixedHeight(140)
+        self.setFixedHeight(CONSOLE_H)
         self.master_logs = []
 
         self.setStyleSheet(
-            "QFrame#LogConsole { background-color: #F5F5F7; border: 1px solid #E5E5EA; border-radius: 10px; }"
+            f"QFrame#LogConsole {{ background-color: {FIELD_BG};"
+            f" border: 1px solid {LINE}; border-radius: 10px; }}"
         )
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
 
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.setStyleSheet(
-            "QSplitter::handle { background-color: #E5E5EA; width: 2px; }"
+            f"QSplitter::handle {{ background-color: {LINE}; width: 2px; }}"
         )
 
-        self.sys_widget = QWidget()
-        self.sys_widget.setStyleSheet("background: transparent; border: none;")
-        sys_layout = QVBoxLayout(self.sys_widget)
-        sys_layout.setContentsMargins(5, 5, 5, 5)
+        self.sys_widget, self.browser, clear_sys = self._panel("SYSTEM LOG CONSOLE")
+        clear_sys.clicked.connect(self.browser.clear)
 
-        sys_header = QHBoxLayout()
-        sys_title = QLabel("SYSTEM LOG CONSOLE")
-        sys_title.setStyleSheet(
-            "font-size: 11px; font-weight: 800; color: #8E8E93; border: none;"
+        self.wsl_widget, self.wsl_browser, clear_wsl = self._panel(
+            "TERMINAL OUTPUT", mono=True
         )
-        sys_header.addWidget(sys_title)
-        sys_header.addStretch()
-        clear_sys_btn = QPushButton("Clear")
-        clear_sys_btn.setCursor(Qt.PointingHandCursor)
-        clear_sys_btn.setStyleSheet(
-            "QPushButton { font-weight: 700; font-size: 11px; color: #8E8E93; border: none; background: transparent; } QPushButton:hover { color: #FF3B30; }"
-        )
-        sys_header.addWidget(clear_sys_btn)
-        sys_layout.addLayout(sys_header)
 
-        self.browser = QTextBrowser()
-        self.browser.setStyleSheet(
-            "QTextBrowser { background-color: transparent; border: none; outline: none; }"
-        )
-        sys_layout.addWidget(self.browser)
-        clear_sys_btn.clicked.connect(self.browser.clear)
-
-        self.wsl_widget = QWidget()
-        self.wsl_widget.setStyleSheet("background: transparent; border: none;")
-        wsl_layout = QVBoxLayout(self.wsl_widget)
-        wsl_layout.setContentsMargins(5, 5, 5, 5)
-
-        wsl_header = QHBoxLayout()
-        wsl_title = QLabel("TERMINAL OUTPUT")
-        wsl_title.setStyleSheet(
-            "font-size: 11px; font-weight: 800; color: #8E8E93; border: none;"
-        )
-        wsl_header.addWidget(wsl_title)
-        wsl_header.addStretch()
-        clear_wsl_btn = QPushButton("Clear")
-        clear_wsl_btn.setCursor(Qt.PointingHandCursor)
-        clear_wsl_btn.setStyleSheet(
-            "QPushButton { font-weight: 700; font-size: 11px; color: #8E8E93; border: none; background: transparent; } QPushButton:hover { color: #FF3B30; }"
-        )
-        wsl_header.addWidget(clear_wsl_btn)
-        wsl_layout.addLayout(wsl_header)
-
-        self.wsl_browser = QTextBrowser()
-        self.wsl_browser.setFont(mono_font(10))
-        self.wsl_browser.setStyleSheet(
-            "QTextBrowser { background-color: #000000; color: #34C759; border: 1px solid #D1D1D6; border-radius: 8px; padding: 8px; outline: none; }"
-        )
-        self.wsl_browser.setText("[SYSTEM] Terminal ready. Waiting for execution...")
-        wsl_layout.addWidget(self.wsl_browser)
-        clear_wsl_btn.clicked.connect(self.clear_wsl_log)
+        self.wsl_browser.setText(TERMINAL_READY)
+        clear_wsl.clicked.connect(self.clear_wsl_log)
 
         self.splitter.addWidget(self.sys_widget)
         self.splitter.addWidget(self.wsl_widget)
-
         self.wsl_widget.hide()
-
         layout.addWidget(self.splitter)
 
-    def set_wsl_mode(self, enabled):
-        if enabled:
-            self.wsl_widget.show()
-            self.setFixedHeight(180)
-            self.splitter.setSizes([500, 500])
+    def _panel(self, title, mono=False):
+        panel = QWidget()
+        panel.setStyleSheet(FLAT)
+        col = QVBoxLayout(panel)
+        col.setContentsMargins(5, 5, 5, 5)
+
+        head = QHBoxLayout()
+        head.addWidget(caption(title))
+        head.addStretch()
+        clear_btn = link_button("Clear", color=INK_FAINT, hover=RED)
+        head.addWidget(clear_btn)
+        col.addLayout(head)
+
+        browser = QTextBrowser()
+        if mono:
+            browser.setFont(mono_font(10))
+            browser.setStyleSheet(
+                f"QTextBrowser {{ background-color: {TERMINAL_BG}; color: {GREEN};"
+                f" border: 1px solid {FIELD_LINE}; border-radius: {RADIUS}px;"
+                f" padding: 8px; outline: none; }}"
+            )
         else:
-            self.wsl_widget.hide()
-            self.setFixedHeight(140)
+            browser.setStyleSheet(f"QTextBrowser {{ {FLAT} outline: none; }}")
+        col.addWidget(browser)
+
+        return panel, browser, clear_btn
+
+    def set_wsl_mode(self, enabled):
+        self.wsl_widget.setVisible(enabled)
+        self.setFixedHeight(CONSOLE_H_WSL if enabled else CONSOLE_H)
+        if enabled:
+            self.splitter.setSizes([500, 500])
 
     def append_wsl_log(self, text):
-        self.wsl_browser.append(text)
+        # Plain, not append(): HyPhy output holding a "<" would otherwise be
+        # read as markup and vanish from the terminal panel.
+        self.wsl_browser.appendPlainText(text)
         self.wsl_browser.moveCursor(QTextCursor.MoveOperation.End)
 
     def clear_wsl_log(self):
         self.wsl_browser.clear()
-        self.wsl_browser.append("[SYSTEM] Terminal ready. Waiting for execution...")
+        self.wsl_browser.append(TERMINAL_READY)
 
     def append_log(self, text, default_type="info"):
-        timestamp = QTime.currentTime().toString("hh:mm:ss")
-        full_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        color_map = {
-            "info": "#8E8E93",
-            "process": "#0071E3",
-            "success": "#34C759",
-            "warning": "#FFCC00",
-            "error": "#FF3B30",
-        }
-
-        color = color_map.get(default_type.lower(), "#8E8E93")
+        level = default_type.lower()
+        body = text
         prefix = default_type.upper()
-        clean_text = re.sub(r'[^\w\s.,!?:;\'"()[\]{}_+\-*/<>=|&^%$#@~`\\]', "", text)
 
-        if text.startswith("["):
-            match = re.match(r"^\[(.*?)\]\s*(.*)", text)
-            if match:
-                parsed_prefix = match.group(1).lower()
-                clean_text = match.group(2)
-                prefix = parsed_prefix.upper()
-                if parsed_prefix in color_map:
-                    color = color_map[parsed_prefix]
-                elif "success" in parsed_prefix or "complete" in parsed_prefix:
-                    color, prefix = color_map["success"], "SUCCESS"
-                elif "error" in parsed_prefix or "fail" in parsed_prefix:
-                    color, prefix = color_map["error"], "ERROR"
-                elif "warn" in parsed_prefix:
-                    color, prefix = color_map["warning"], "WARNING"
-                elif "process" in parsed_prefix or "start" in parsed_prefix:
-                    color, prefix = color_map["process"], "PROCESS"
+        # DOTALL: a message that explains itself over several lines must not
+        # lose everything after the first.
+        match = (
+            re.match(r"^\[(.*?)\]\s*(.*)", text, re.DOTALL)
+            if text.startswith("[")
+            else None
+        )
+        if match:
+            tag = match.group(1).lower()
+            body = match.group(2)
+            prefix = tag.upper()
+            if tag in LOG_COLORS:
+                level = tag
+            else:
+                for needles, mapped in LOG_ALIASES:
+                    if any(n in tag for n in needles):
+                        level, prefix = mapped, mapped.upper()
+                        break
 
-        html = f"""
-        <div style="font-family: {MONO_FAMILY}; font-size: 12px; margin-bottom: 3px;">
-            <span style="color: #AEAEB2;">[{timestamp}]</span>
-            <span style="color: {color}; font-weight: bold;">[{prefix}]</span>
-            <span style="color: #1D1D1F;">{clean_text}</span>
-        </div>
-        """
-        self.browser.append(html)
+        color = LOG_COLORS.get(level, INK_FAINT)
+        clock = QTime.currentTime().toString("hh:mm:ss")
+        # escape, not a character filter: the filter dropped "/" and turned
+        # every path in a message into one word.
+        shown = html.escape(body).replace("\n", "<br>")
+        self.browser.append(
+            f'<div style="font-family: {MONO_FAMILY}; font-size: {FS_FIELD}px;'
+            f' margin-bottom: 3px;">'
+            f'<span style="color: {LOG_TIME};">[{clock}]</span> '
+            f'<span style="color: {color}; font-weight: bold;">[{prefix}]</span> '
+            f'<span style="color: {INK};">{shown}</span></div>'
+        )
         self.browser.moveCursor(QTextCursor.MoveOperation.End)
-        self.master_logs.append(f"[{full_timestamp}] [{prefix}] {clean_text}")
+        self.master_logs.append(f"[{common_utils.timestamp()}] [{prefix}] {body}")
 
     def export_master_log(self, project_path):
         if not self.master_logs or not project_path:
             return
-
         try:
-            mmdd = datetime.now().strftime("%m%d")
-            report_dir = Path(project_path) / "Reports" / "System_Logs"
+            report_dir = Path(project_path) / common_utils.REPORTS / "System_Logs"
             report_dir.mkdir(parents=True, exist_ok=True)
+            log_file = report_dir / f"log_report_{common_utils.mmdd()}.txt"
 
-            log_file = report_dir / f"log_report_{mmdd}.txt"
-
+            bar = "=" * 50
             with open(log_file, "a", encoding="utf-8") as f:
-                f.write(f"\n{'='*50}\n")
                 f.write(
-                    f"HYphlow Session Ended: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                    f"\n{bar}\nHYphlow Session Ended: {common_utils.timestamp()}\n"
+                    f"{bar}\n"
                 )
-                f.write(f"{'='*50}\n")
                 f.write("\n".join(self.master_logs) + "\n\n")
 
             self.master_logs.clear()
-        except Exception:
+        except OSError:
+            # Losing the session log must not stop the app from closing.
             pass
-
-
-def _demo():
-    """Light mode must survive a dark desktop. Run: python -m hyphlow.common_ui"""
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    os.environ["QT_STYLE_OVERRIDE"] = "Adwaita-Dark"
-    os.environ["QT_QPA_PLATFORMTHEME"] = "gtk3"
-    force_light_env()
-    assert "QT_STYLE_OVERRIDE" not in os.environ
-    assert "QT_QPA_PLATFORMTHEME" not in os.environ
-
-    from PyQt5.QtWidgets import QApplication, QMessageBox
-
-    app = QApplication([])
-    dark = QPalette()  # what a dark desktop hands Qt
-    for role in _LIGHT_ROLES:
-        dark.setColor(getattr(QPalette, role), QColor("#1E1E1E"))
-    app.setPalette(dark)
-
-    apply_light_theme(app)
-
-    for role, want in _LIGHT_ROLES.items():
-        got = app.palette().color(getattr(QPalette, role)).name().lower()
-        assert got == want.lower(), f"{role}: {got} != {want}"
-    for role, want in _DISABLED_ROLES.items():
-        got = app.palette().color(QPalette.Disabled, getattr(QPalette, role)).name()
-        assert got.lower() == want.lower(), f"disabled {role}: {got} != {want}"
-
-    def luma(c):
-        return 0.2126 * c.red() + 0.7152 * c.green() + 0.0722 * c.blue()
-
-    for role in ("Window", "Base", "Button", "Light"):
-        assert luma(app.palette().color(getattr(QPalette, role))) > 200, role
-    for role in ("WindowText", "Text", "ButtonText"):
-        assert luma(app.palette().color(getattr(QPalette, role))) < 120, role
-
-    box = QMessageBox(QMessageBox.Warning, "t", "m")
-    box.show()
-    app.processEvents()
-    px = box.grab().toImage().pixelColor(3, 3)
-    assert luma(px) > 200, f"popup rendered dark: {px.name()}"
-    print("ok")
-
-
-if __name__ == "__main__":
-    _demo()
