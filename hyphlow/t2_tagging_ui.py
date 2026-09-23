@@ -1061,19 +1061,14 @@ class Tab2TaggingUI(QWidget):
                         "[WARNING] %s: %s"
                         % (os.path.basename(r.get("original_nwk", key)), w)
                     )
-                for item in r.get("tree_cleanup_notes", []):
-                    detail = ""
-                    if item["taxa"]:
-                        detail = " — %d taxa below: %s" % (
-                            item["taxa_count"],
-                            item["taxa"],
-                        )
+                for item in r.get("tree_notes", []):
                     self.log_msg.emit(
-                        "[INFO] %s: %s%s"
+                        "[INFO] %s: %s - %d taxa: %s"
                         % (
                             os.path.basename(r.get("original_nwk", key)),
                             item["note"],
-                            detail,
+                            item["taxa_count"],
+                            item["taxa"],
                         )
                     )
                 if r.get("mu_estimated"):
@@ -1160,13 +1155,7 @@ class Tab2TaggingUI(QWidget):
         # gene's topology matches the tips, whose names are shared, but not the
         # internal clades, so the scores are silently dropped for most internal
         # nodes and those branches come out inactive however they were tagged.
-        #
-        # The collapsed tree when one was written. The algorithms and the scores
-        # file both refer to it, so drawing the uncollapsed tree leaves every
-        # collapsed node without a score for the same reason.
-        nwk_path = self.current_res.get("cleaned_tree_path") or self.current_res.get(
-            "original_nwk"
-        )
+        nwk_path = self.current_res.get("original_nwk")
         if nwk_path and not os.path.exists(first_img):
             t2_tagging_logic.render_all_steps(
                 nwk_path,
