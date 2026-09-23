@@ -609,7 +609,7 @@ def render_all_steps(nwk_file, file_base_path, tagged_data, no_signal=False) -> 
                 "whatever their tag (%d tip, %d internal). Tree: %s. When the tips "
                 "all match and the internal clades do not, the figure is being "
                 "drawn on the wrong tree: it has to be the tree the scores were "
-                "computed on, collapsed if branches were collapsed."
+                "computed on."
                 % (len(missing), len(keys), n_tips, len(missing) - n_tips, nwk_file)
             )
 
@@ -691,45 +691,15 @@ def add_svg_watermark(
 
 
 ZERO_LEN = 1e-10  # HyPhy kill range upper bound; shorter is effectively zero
-NEAR_ZERO = 1e-6  # may collapse during optimisation; warn only
 
 
-def collapse_zero_length(tree, threshold=ZERO_LEN, near=NEAR_ZERO):
-    """Remove internal branches shorter than `threshold`.
-
-    HyPhy deletes these itself (--kill-zero-lengths defaults to Yes), which can
-    silently drop a branch we tagged. Doing it before tagging keeps the tags on
-    branches that survive to the analysis.
-
-    Leaf branches are never removed: a zero-length leaf means two sequences are
-    identical, which is a data issue, not a topology one.
-    """
-    removed, near_zero, zero_leaves = [], [], []
-
-    for node in list(tree.traverse("postorder")):
-        d = node.dist if node.dist is not None else 0.0
-        if node.is_leaf():
-            if d < threshold:
-                zero_leaves.append(node.name)
-            elif d < near:
-                near_zero.append((node.name, d))
-            continue
-        if node.is_root():
-            continue
+def zero_length_leaves(tree, threshold=ZERO_LEN):
+    names = []
+    for leaf in tree.iter_leaves():
+        d = leaf.dist if leaf.dist is not None else 0.0
         if d < threshold:
-            removed.append(
-                {
-                    "name": node.name or "unnamed",
-                    "length": d,
-                    "n_children": len(node.children),
-                    "taxa": sorted(node.get_leaf_names()),
-                }
-            )
-            node.delete(prevent_nondicotomic=False, preserve_branch_length=True)
-        elif d < near:
-            near_zero.append((node.name or "unnamed", d))
-
-    return {"removed": removed, "near_zero": near_zero, "zero_leaves": zero_leaves}
+            names.append(leaf.name)
+    return names
 
 
 # ================================================= ancestral state algorithms
@@ -882,11 +852,6 @@ def resolve_mu(tree, tagged_data: dict, setting) -> tuple:
 
     Returns (mu, warnings, estimated). `setting` is either the string "auto" or a
     number.
-
-    The estimate is made on the same tree the model will then run on, collapsed
-    branches and all. A rate fitted to one topology does not belong to another,
-    and the likelihood being maximised depends on the topology, so fitting on the
-    uncollapsed tree would tune the parameter to a tree that is never used.
 
     A copy is passed, because estimate_mu leaves its own intermediate values on
     the nodes it visits.
@@ -1240,42 +1205,16 @@ def _info_row(taxa_count, taxa: str, note: str) -> dict:
     return row
 
 
-def cleanup_notes(zl: dict) -> list:
-    """Messages about the branches the tree cleanup removed or flagged.
-
-    Returned as dicts of taxa_count, taxa and note, which the report turns into
-    its informational rows. Kept apart from the report itself so the caller can
-    also hand them to the GUI.
-    """
-    notes = []
-    for removed in zl["removed"]:
-        notes.append(
-            {
-                "taxa_count": len(removed["taxa"]),
-                "taxa": _name_taxa(removed["taxa"]),
-                "note": "Removed internal branch (length %.3g) before tagging"
-                % removed["length"],
-            }
-        )
-    if zl["near_zero"]:
-        notes.append(
-            {
-                "taxa_count": "",
-                "taxa": "",
-                "note": "%d branch(es) between %g and %g kept; HyPhy may collapse "
-                "these during optimisation"
-                % (len(zl["near_zero"]), ZERO_LEN, NEAR_ZERO),
-            }
-        )
-    if zl["zero_leaves"]:
-        notes.append(
-            {
-                "taxa_count": len(zl["zero_leaves"]),
-                "taxa": _name_taxa(zl["zero_leaves"]),
-                "note": "Zero-length leaf branch(es) \u2014 identical sequences",
-            }
-        )
-    return notes
+def zero_leaf_notes(zero_leaves):
+    if not zero_leaves:
+        return []
+    return [
+        {
+            "taxa_count": len(zero_leaves),
+            "taxa": _name_taxa(zero_leaves),
+            "note": "Zero-length leaf branch(es) \u2014 identical sequences",
+        }
+    ]
 
 
 def build_scores(
@@ -1285,7 +1224,7 @@ def build_scores(
     smap_by_clade: dict,
     tie_by_clade: dict,
     smap_threshold: float,
-    clean_notes: list,
+    tree_notes: list,
 ) -> tuple:
     """Per-branch scores for the figures, and the rows of the run report.
 
@@ -1302,8 +1241,7 @@ def build_scores(
     """
     score_data = []
     report_rows = [
-        _info_row(item["taxa_count"], item["taxa"], item["note"])
-        for item in clean_notes
+        _info_row(item["taxa_count"], item["taxa"], item["note"]) for item in tree_notes
     ]
     node_number = 1
 
@@ -1541,9 +1479,6 @@ def run_consensus_tagging(
     running, and are also logged, so a caller that ignores the dict still leaves a
     trace.
 
-    All three algorithms see the same tree, with zero-length internal branches
-    already collapsed. Collapsing first matters because HyPhy removes those
-    branches itself and would otherwise drop one this run had tagged.
     """
     # Caller values override the defaults key by key, so a partial dict does not
     # silently reinstate an older default for the keys it left out.
@@ -1576,19 +1511,7 @@ def run_consensus_tagging(
     out_report_csv = base_rep_dir / f"Rpt_{stem}_v{next_v}_{mmdd}.csv"
 
     try:
-        cleaned = Tree(nwk_file, format=1)
-        zl = collapse_zero_length(cleaned)
-        tree_source = nwk_file
-        cleaned_path = None
-        if zl["removed"]:
-            # Written as a real output rather than a temporary file. Both
-            # algorithms and the rate estimate ran on this tree and not on the one
-            # supplied, so a reader has to be able to see it.
-            cleaned_path = trees_base_dir / f"{stem}_collapsed_v{next_v}_{mmdd}.nwk"
-            cleaned.write(outfile=str(cleaned_path), format=1)
-            tree_source = str(cleaned_path)
-
-        tree_f = initialize_tree(tree_source, tagged_data, FITCH)
+        tree_f = initialize_tree(nwk_file, tagged_data, FITCH)
         n_leaves = len(tree_f.get_leaves())
         n_matched = tree_f.n_matched
         unmatched = list(tree_f.unmatched_leaves)
@@ -1599,7 +1522,7 @@ def run_consensus_tagging(
             )
         fitch_states(tree_f)
 
-        tree_m = initialize_tree(tree_source, tagged_data, FELSENSTEIN)
+        tree_m = initialize_tree(nwk_file, tagged_data, FELSENSTEIN)
         mu, mu_warnings, mu_estimated = resolve_mu(
             tree_m, tagged_data, params["felsenstein_mu"]
         )
@@ -1617,7 +1540,7 @@ def run_consensus_tagging(
         by_clade_m, prob_by_clade, smap_by_clade = _index_by_clade(tree_f, tree_m)
         tie_by_clade = {_clade_key(n): n.f_mpr_tie for n in tree_f.traverse()}
 
-        clean_notes = cleanup_notes(zl)
+        tree_notes = zero_leaf_notes(zero_length_leaves(tree_f))
         score_data, report_rows = build_scores(
             tree_f,
             by_clade_m,
@@ -1625,7 +1548,7 @@ def run_consensus_tagging(
             smap_by_clade,
             tie_by_clade,
             smap_threshold,
-            clean_notes,
+            tree_notes,
         )
 
         with open(f"{out_fig_base}_scores.json", "w", encoding="utf-8") as fh:
@@ -1664,9 +1587,7 @@ def run_consensus_tagging(
             "mu_estimated": mu_estimated,
             "mu_warnings": mu_warnings,
             "no_signal": no_signal,
-            "tree_cleanup": zl,
-            "tree_cleanup_notes": clean_notes,
-            "cleaned_tree_path": str(cleaned_path) if cleaned_path else None,
+            "tree_notes": tree_notes,
             "algo_params": params,
         }
     except Exception as exc:
