@@ -1,4 +1,8 @@
 from pathlib import Path
+
+import qtawesome as qta
+from PyQt5.QtCore import Qt, pyqtSignal, QThread
+from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -12,31 +16,69 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QSizePolicy,
 )
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QColor
-import qtawesome as qta
 
-from hyphlow import t1_st5_logic
-from hyphlow import t1_st1_logic
-from hyphlow import manifest_logic_tab
-from hyphlow.common_ui import (
-    UnifiedDropZone,
-    TableCheckBoxWidget,
-    PrimaryButton,
-    ActionButton,
+from hyphlow import (
+    manifest_logic_tab,
+    t1_st1_logic,
+    t1_st5_logic,
 )
+from hyphlow.common_ui import (
+    BLUE,
+    DIM,
+    FLAT,
+    FS_BODY,
+    FS_FIELD,
+    FS_SMALL,
+    FS_TINY,
+    GREEN,
+    GREEN_DARK,
+    GREEN_FILL,
+    INK,
+    INK_FAINT,
+    INK_HOVER,
+    INK_MUTED,
+    LINE,
+    ORANGE,
+    ORANGE_FILL,
+    RADIUS,
+    RADIUS_SMALL,
+    RED,
+    RED_FILL,
+    SURFACE,
+    SURFACE_ALT,
+    ActionButton,
+    PrimaryButton,
+    TableCheckBoxWidget,
+    UnifiedDropZone,
+    card,
+)
+
+# ============================================================ constants
+ROW_H_RECON = 40
+TABLE_MAX_H = 250
+MAX_FILES_SHOWN = 3
+RECON_JOB = "Data_Reconciliation_Job"
+
+
+def _badge_style(bg, fg):
+    return (
+        f"background: {bg}; color: {fg}; padding: 4px 8px;"
+        f" border-radius: {RADIUS_SMALL}px; font-size: {FS_TINY}px;"
+        f" font-weight: bold; border: none;"
+    )
 
 
 def create_status_badge(text, bg_color, text_color):
     wrapper = QWidget()
     wrapper.setAttribute(Qt.WA_TranslucentBackground)
-    wrapper.setStyleSheet("background: transparent; border: none;")
+    wrapper.setStyleSheet(FLAT)
     layout = QHBoxLayout(wrapper)
     layout.setContentsMargins(0, 0, 0, 0)
     lbl = QLabel(text)
     lbl.setAlignment(Qt.AlignCenter)
     lbl.setStyleSheet(
-        f"background-color: {bg_color}; color: {text_color}; border-radius: 4px; font-weight: bold; font-size: 11px; padding: 4px 8px;"
+        f"background-color: {bg_color}; color: {text_color}; border-radius: 4px;"
+        f" font-weight: bold; font-size: {FS_TINY}px; padding: 4px 8px;"
     )
     layout.addWidget(lbl)
     layout.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
@@ -51,7 +93,8 @@ class CategorySection(QWidget):
 
         self.title_lbl = QLabel(title)
         self.title_lbl.setStyleSheet(
-            "font-size: 14px; font-weight: 700; color: #515154; padding-left: 5px; border: none; background: transparent;"
+            f"font-size: {FS_BODY}px; font-weight: 700; color: {INK_MUTED};"
+            f" padding-left: 5px; {FLAT}"
         )
         layout.addWidget(self.title_lbl)
 
@@ -79,10 +122,15 @@ class ReconResultBlock(QFrame):
         super().__init__()
         self.src = src
         self.fname = fname
-        self.corrections = [r for r in file_results if r[3] in ["SIMILAR", "NOT_FOUND"]]
+        self.corrections = [
+            r
+            for r in file_results
+            if r[3] in (t1_st5_logic.SIMILAR, t1_st5_logic.NOT_FOUND)
+        ]
 
         self.setStyleSheet(
-            "QFrame#Block { border: 1px solid #E5E5EA; border-radius: 6px; background: #FAFAFA; }"
+            f"QFrame#Block {{ border: 1px solid {LINE};"
+            f" border-radius: {RADIUS_SMALL}px; background: {DIM}; }}"
         )
         self.setObjectName("Block")
 
@@ -92,7 +140,7 @@ class ReconResultBlock(QFrame):
 
         self.header = QFrame()
         self.header.setCursor(Qt.PointingHandCursor)
-        self.header.setStyleSheet("background: transparent; border: none;")
+        self.header.setStyleSheet(FLAT)
         h_layout = QHBoxLayout(self.header)
         h_layout.setContentsMargins(15, 10, 15, 10)
 
@@ -100,12 +148,12 @@ class ReconResultBlock(QFrame):
         icon_name = "mdi.file-document-outline"
         if src in ["NWK", "FAS_NWK"]:
             icon_name = "mdi.file-tree"
-        icon_lbl.setPixmap(qta.icon(icon_name, color="#515154").pixmap(18, 18))
+        icon_lbl.setPixmap(qta.icon(icon_name, color=INK_MUTED).pixmap(18, 18))
         h_layout.addWidget(icon_lbl)
 
         name_lbl = QLabel(self.fname)
         name_lbl.setStyleSheet(
-            "font-size: 14px; font-weight: 500; color: #1D1D1F; border: none; background: transparent;"
+            f"font-size: {FS_BODY}px; font-weight: 500; color: {INK}; {FLAT}"
         )
         h_layout.addWidget(name_lbl)
 
@@ -118,19 +166,14 @@ class ReconResultBlock(QFrame):
         stats_layout.setContentsMargins(10, 0, 0, 0)
 
         lbl_tot = QLabel(f"Total: {total_cnt}")
-        lbl_tot.setStyleSheet(
-            "background: #E5E5EA; color: #515154; padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: bold; border: none;"
-        )
+        lbl_tot.setStyleSheet(_badge_style(LINE, INK_MUTED))
         lbl_perf = QLabel(f"Perfect: {perfect_cnt}")
-        lbl_perf.setStyleSheet(
-            "background: #EBF9EE; color: #16A34A; padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: bold; border: none;"
-        )
+        lbl_perf.setStyleSheet(_badge_style(GREEN_FILL, GREEN_DARK))
         lbl_mis = QLabel(f"Mismatches: {mismatch_cnt}")
-        mis_bg = "#FFECEB" if mismatch_cnt > 0 else "#E5E5EA"
-        mis_fg = "#FF3B30" if mismatch_cnt > 0 else "#8E8E93"
-        lbl_mis.setStyleSheet(
-            f"background: {mis_bg}; color: {mis_fg}; padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: bold; border: none;"
-        )
+        if mismatch_cnt:
+            lbl_mis.setStyleSheet(_badge_style(RED_FILL, RED))
+        else:
+            lbl_mis.setStyleSheet(_badge_style(LINE, INK_FAINT))
 
         stats_layout.addWidget(lbl_tot)
         stats_layout.addWidget(lbl_perf)
@@ -139,26 +182,28 @@ class ReconResultBlock(QFrame):
         h_layout.addStretch()
 
         self.btn_apply_block = QPushButton("Apply Changes")
-        self.btn_apply_block.setIcon(qta.icon("mdi.play", color="white"))
-        self.btn_apply_block.setStyleSheet("""
-            QPushButton { background-color: #1D1D1F; color: white; font-weight: bold; font-size: 12px; padding: 6px 14px; border-radius: 6px; border: none; }
-            QPushButton:hover { background-color: #333333; }
-        """)
+        self.btn_apply_block.setIcon(qta.icon("mdi.play", color=SURFACE))
+        self.btn_apply_block.setStyleSheet(
+            f"QPushButton {{ background-color: {INK}; color: {SURFACE};"
+            f" font-weight: bold; font-size: {FS_FIELD}px; padding: 6px 14px;"
+            f" border-radius: {RADIUS_SMALL}px; border: none; }}"
+            f"QPushButton:hover {{ background-color: {INK_HOVER}; }}"
+        )
         self.btn_apply_block.setCursor(Qt.PointingHandCursor)
         self.btn_apply_block.clicked.connect(lambda: self.apply_requested.emit(self))
         h_layout.addWidget(self.btn_apply_block)
 
         self.toggle_icon = QLabel()
         self.toggle_icon.setPixmap(
-            qta.icon("mdi.chevron-down", color="#1D1D1F").pixmap(20, 20)
+            qta.icon("mdi.chevron-down", color=INK).pixmap(20, 20)
         )
-        self.toggle_icon.setStyleSheet("border: none; background: transparent;")
+        self.toggle_icon.setStyleSheet(FLAT)
         h_layout.addWidget(self.toggle_icon)
         layout.addWidget(self.header)
 
         self.content_area = QFrame()
         self.content_area.hide()
-        self.content_area.setStyleSheet("border: none; background: transparent;")
+        self.content_area.setStyleSheet(FLAT)
         c_layout = QVBoxLayout(self.content_area)
         c_layout.setContentsMargins(15, 0, 15, 15)
 
@@ -167,7 +212,8 @@ class ReconResultBlock(QFrame):
                 "All taxa match the reference perfectly. Report generation available."
             )
             empty_lbl.setStyleSheet(
-                "color: #8E8E93; font-size: 13px; font-style: italic; border: none; background: transparent;"
+                f"color: {INK_FAINT}; font-size: {FS_SMALL}px;"
+                f" font-style: italic; {FLAT}"
             )
             c_layout.addWidget(empty_lbl)
         else:
@@ -186,17 +232,24 @@ class ReconResultBlock(QFrame):
             self.table.setColumnWidth(3, 120)
 
             self.table.verticalHeader().setVisible(False)
-            self.table.verticalHeader().setDefaultSectionSize(40)
+            self.table.verticalHeader().setDefaultSectionSize(ROW_H_RECON)
             self.table.setFocusPolicy(Qt.NoFocus)
 
-            th = min(len(self.corrections) * 40 + 38, 250)
+            th = min(len(self.corrections) * ROW_H_RECON + 38, TABLE_MAX_H)
             self.table.setFixedHeight(th)
 
-            self.table.setStyleSheet("""
-                QTableWidget { border: 1px solid #E5E5EA; border-radius: 8px; background-color: #FFFFFF; outline: none; gridline-color: transparent; }
-                QTableWidget::item { padding: 4px 8px; border-bottom: 1px solid #F2F2F7; font-size: 12px; color: #1D1D1F; }
-                QHeaderView::section { background-color: #FAFAFA; border: none; border-bottom: 1px solid #E5E5EA; font-size: 11px; font-weight: bold; color: #8E8E93; height: 32px; padding-left: 8px;}
-            """)
+            self.table.setStyleSheet(
+                f"QTableWidget {{ border: 1px solid {LINE};"
+                f" border-radius: {RADIUS}px; background-color: {SURFACE};"
+                f" outline: none; gridline-color: transparent; }}"
+                f"QTableWidget::item {{ padding: 4px 8px;"
+                f" border-bottom: 1px solid {SURFACE_ALT};"
+                f" font-size: {FS_FIELD}px; color: {INK}; }}"
+                f"QHeaderView::section {{ background-color: {DIM};"
+                f" border: none; border-bottom: 1px solid {LINE};"
+                f" font-size: {FS_TINY}px; font-weight: bold;"
+                f" color: {INK_FAINT}; height: 32px; padding-left: 8px; }}"
+            )
 
             for row, r_data in enumerate(self.corrections):
                 orig, status, sugg = r_data[2], r_data[3], r_data[4]
@@ -204,14 +257,14 @@ class ReconResultBlock(QFrame):
                 item_o = QTableWidgetItem(orig)
                 item_s = QTableWidgetItem(sugg)
 
-                if status == "NOT_FOUND":
-                    item_s.setForeground(QColor("#FF3B30"))
-                    badge = create_status_badge("Mismatch", "#FFECEB", "#FF3B30")
+                if status == t1_st5_logic.NOT_FOUND:
+                    item_s.setForeground(QColor(RED))
+                    badge = create_status_badge("Mismatch", RED_FILL, RED)
                 else:
-                    item_s.setForeground(QColor("#0071E3"))
-                    badge = create_status_badge("Similar", "#FFF9E5", "#FF9500")
+                    item_s.setForeground(QColor(BLUE))
+                    badge = create_status_badge("Similar", ORANGE_FILL, ORANGE)
 
-                chk_w = TableCheckBoxWidget(checked=(status != "NOT_FOUND"))
+                chk_w = TableCheckBoxWidget(checked=(status != t1_st5_logic.NOT_FOUND))
 
                 self.table.setCellWidget(row, 0, chk_w)
                 self.table.setItem(row, 1, item_o)
@@ -226,14 +279,11 @@ class ReconResultBlock(QFrame):
     def toggle(self, event):
         if self.content_area.isVisible():
             self.content_area.hide()
-            self.toggle_icon.setPixmap(
-                qta.icon("mdi.chevron-down", color="#1D1D1F").pixmap(20, 20)
-            )
+            icon = "mdi.chevron-down"
         else:
             self.content_area.show()
-            self.toggle_icon.setPixmap(
-                qta.icon("mdi.chevron-up", color="#1D1D1F").pixmap(20, 20)
-            )
+            icon = "mdi.chevron-up"
+        self.toggle_icon.setPixmap(qta.icon(icon, color=INK).pixmap(20, 20))
 
     def get_selected_corrections(self):
         to_apply = {}
@@ -244,9 +294,67 @@ class ReconResultBlock(QFrame):
             if w and w.is_checked:
                 orig = self.table.item(r, 1).text()
                 sugg = self.table.item(r, 2).text()
-                if sugg != "No safe match":
+                if sugg != t1_st5_logic.NO_MATCH_LABEL:
                     to_apply[orig] = sugg
         return to_apply
+
+
+class _VerifyThread(QThread):
+    finished = pyqtSignal(dict)
+    failed = pyqtSignal(str)
+
+    def __init__(self, csv_path, csv_col, fasta_files, nwk_files):
+        super().__init__()
+        self.csv_path = csv_path
+        self.csv_col = csv_col
+        self.fasta_files = fasta_files
+        self.nwk_files = nwk_files
+
+    def run(self):
+        try:
+            results = t1_st5_logic.run_smart_verification(
+                self.csv_path, self.csv_col, self.fasta_files, self.nwk_files
+            )
+        except Exception as e:
+            self.failed.emit(str(e))
+            return
+        self.finished.emit(results)
+
+
+class _ApplyThread(QThread):
+    finished = pyqtSignal(list, list, list)
+    failed = pyqtSignal(str)
+    progress = pyqtSignal(int, int)
+
+    def __init__(
+        self,
+        fasta_files,
+        fasta_corrections,
+        nwk_files,
+        nwk_corrections,
+        status_lookup,
+    ):
+        super().__init__()
+        self.fasta_files = fasta_files
+        self.fasta_corrections = fasta_corrections
+        self.nwk_files = nwk_files
+        self.nwk_corrections = nwk_corrections
+        self.status_lookup = status_lookup
+
+    def run(self):
+        try:
+            fs, ns, rs = t1_st5_logic.apply_and_save_reconciled(
+                self.fasta_files,
+                self.fasta_corrections,
+                self.nwk_files,
+                self.nwk_corrections,
+                self.status_lookup,
+                self.progress.emit,
+            )
+        except Exception as e:
+            self.failed.emit(str(e))
+            return
+        self.finished.emit(fs, ns, rs)
 
 
 class Subtab5ReconUI(QWidget):
@@ -259,6 +367,9 @@ class Subtab5ReconUI(QWidget):
         self.fasta_files = []
         self.nwk_files = []
         self.result_blocks = []
+        self.verify_thread = None
+        self.apply_thread = None
+        self.applied_block = None
         self._setup_ui()
 
     def _setup_ui(self):
@@ -269,12 +380,10 @@ class Subtab5ReconUI(QWidget):
         self.global_scroll.setWidgetResizable(True)
         self.global_scroll.setFrameShape(QFrame.NoFrame)
         self.global_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.global_scroll.setStyleSheet(
-            "QScrollArea { border: none; background: transparent; }"
-        )
+        self.global_scroll.setStyleSheet(f"QScrollArea {{ {FLAT} }}")
 
         scroll_content = QWidget()
-        scroll_content.setStyleSheet("background-color: transparent;")
+        scroll_content.setStyleSheet(FLAT)
 
         main_layout = QVBoxLayout(scroll_content)
         main_layout.setContentsMargins(40, 30, 40, 30)
@@ -283,9 +392,7 @@ class Subtab5ReconUI(QWidget):
         main_card = QFrame()
         main_card.setObjectName("ReconMainCard")
         main_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-        main_card.setStyleSheet(
-            "QFrame#ReconMainCard { background-color: #ffffff; border: 1px solid #e5e5ea; border-radius: 16px; }"
-        )
+        main_card.setStyleSheet(card(name="ReconMainCard"))
         card_layout = QVBoxLayout(main_card)
         card_layout.setContentsMargins(25, 25, 25, 25)
         card_layout.setSpacing(15)
@@ -295,18 +402,14 @@ class Subtab5ReconUI(QWidget):
 
         self.title_lbl = QLabel("Data Reconciliation")
         self.title_lbl.setObjectName("SubHeader")
-        self.title_lbl.setStyleSheet(
-            "border: none; background: transparent; color: #1D1D1F;"
-        )
+        self.title_lbl.setStyleSheet(f"{FLAT} color: {INK};")
         header_vbox.addWidget(self.title_lbl)
 
         self.desc_lbl = QLabel(
             "Compares species labels across CSV, FASTA, and NWK files to detect mismatches."
         )
         self.desc_lbl.setObjectName("SubText")
-        self.desc_lbl.setStyleSheet(
-            "border: none; background: transparent; color: #515154;"
-        )
+        self.desc_lbl.setStyleSheet(f"{FLAT} color: {INK_MUTED};")
         header_vbox.addWidget(self.desc_lbl)
 
         card_layout.addLayout(header_vbox)
@@ -351,16 +454,14 @@ class Subtab5ReconUI(QWidget):
         self.results_scroll = QScrollArea()
         self.results_scroll.setWidgetResizable(True)
         self.results_scroll.setFrameShape(QFrame.NoFrame)
-        self.results_scroll.setStyleSheet(
-            "QScrollArea { border: none; background-color: transparent; outline: none; }"
-        )
+        self.results_scroll.setStyleSheet(f"QScrollArea {{ {FLAT} outline: none; }}")
         self.results_scroll.setMinimumHeight(200)
         self.results_scroll.setMaximumHeight(400)
 
         self.results_container = QWidget()
         self.results_container.setObjectName("ResContainer")
         self.results_container.setStyleSheet(
-            "QWidget#ResContainer { background: transparent; border: none; outline: none; }"
+            f"QWidget#ResContainer {{ {FLAT} outline: none; }}"
         )
         self.results_layout = QVBoxLayout(self.results_container)
         self.results_layout.setContentsMargins(0, 0, 0, 0)
@@ -389,7 +490,7 @@ class Subtab5ReconUI(QWidget):
 
         separator = QFrame()
         separator.setFrameShape(QFrame.HLine)
-        separator.setStyleSheet("color: #E5E5EA; margin-top: 10px; margin-bottom: 5px;")
+        separator.setStyleSheet(f"color: {LINE}; margin-top: 10px; margin-bottom: 5px;")
         card_layout.addWidget(separator)
 
         btn_layout = QHBoxLayout()
@@ -410,14 +511,13 @@ class Subtab5ReconUI(QWidget):
         self.notify_lbl = QLabel("")
         self.notify_lbl.setAlignment(Qt.AlignCenter)
         self.notify_lbl.setStyleSheet(
-            "font-size: 13px; font-weight: bold; border:none; background: transparent;"
+            f"font-size: {FS_SMALL}px; font-weight: bold; {FLAT}"
         )
         self.notify_lbl.hide()
         card_layout.addWidget(self.notify_lbl)
 
         main_layout.addWidget(main_card, 0, Qt.AlignTop)
         main_layout.addStretch(1)
-
         self.global_scroll.setWidget(scroll_content)
         master_layout.addWidget(self.global_scroll)
 
@@ -425,8 +525,9 @@ class Subtab5ReconUI(QWidget):
         super().resizeEvent(event)
         w = self.width()
 
-        short_text = 'Drag & drop... <span style="color: #0071E3; text-decoration: underline;">browse</span>'
-        long_text = 'Drag & drop files here, or <span style="color: #0071E3; text-decoration: underline;">click to browse</span>'
+        link = f'style="color: {BLUE}; text-decoration: underline;"'
+        short_text = f"Drag & drop ... <span {link}>browse</span>"
+        long_text = f"Drag & drop files here, or <span {link}>click to browse</span>"
 
         for dz in [self.dz_csv, self.dz_fasta, self.dz_nwk]:
             if hasattr(dz, "main_text"):
@@ -456,6 +557,11 @@ class Subtab5ReconUI(QWidget):
         if files:
             self.log_msg.emit(f"[INFO] Loaded {len(files)} NWK file(s).")
 
+    def _notify(self, text, color):
+        self.notify_lbl.setText(text)
+        self.notify_lbl.setStyleSheet(f"color: {color}; font-weight: bold; {FLAT}")
+        self.notify_lbl.show()
+
     def run_verification(self):
         self.log_msg.emit("[PROCESS] Initialization: Validating input files...")
 
@@ -469,13 +575,12 @@ class Subtab5ReconUI(QWidget):
                 unregistered.append(Path(f).name)
 
         if unregistered:
+            shown = ", ".join(unregistered[:MAX_FILES_SHOWN])
+            if len(unregistered) > MAX_FILES_SHOWN:
+                shown += "..."
             self.log_msg.emit(
-                "[WARNING] %d file(s) are not in the project manifest: %s"
-                % (
-                    len(unregistered),
-                    ", ".join(unregistered[:3])
-                    + (" ..." if len(unregistered) > 3 else ""),
-                )
+                f"[WARNING] {len(unregistered)} file(s) are not in the "
+                f"project manifest: {shown}"
             )
             self.log_msg.emit(
                 "[INFO] Proceeding anyway. Results may not be traceable to a "
@@ -489,11 +594,7 @@ class Subtab5ReconUI(QWidget):
             self.log_msg.emit(
                 "[WARNING] Insufficient data. Requires at least TWO types of inputs (e.g., CSV+FASTA, CSV+NWK) for cross-validation."
             )
-            self.notify_lbl.setText("Missing Data. Check system log.")
-            self.notify_lbl.setStyleSheet(
-                "color: #FF3B30; font-weight: bold; border:none; background: transparent;"
-            )
-            self.notify_lbl.show()
+            self._notify("Missing Data. Check system log.", RED)
             return
 
         col = ""
@@ -504,68 +605,67 @@ class Subtab5ReconUI(QWidget):
             f"[PROCESS] Executing Verification: Cross-referencing {len(self.fasta_files)} FASTA(s) and {len(self.nwk_files)} NWK(s) against Master CSV..."
         )
 
-        try:
-            self.cat_csv_fas.clear()
-            self.cat_csv_nwk.clear()
-            self.cat_fas_nwk.clear()
-            self.cat_nwk_fas.clear()
-            self.result_blocks = []
+        self.cat_csv_fas.clear()
+        self.cat_csv_nwk.clear()
+        self.cat_fas_nwk.clear()
+        self.cat_nwk_fas.clear()
+        self.result_blocks = []
 
-            results = t1_st5_logic.run_smart_verification(
-                self.csv_path,
-                col,
-                self.fasta_files,
-                self.nwk_files,
+        self.btn_verify.setEnabled(False)
+        self.btn_apply.setEnabled(False)
+        self.progress_update.emit(RECON_JOB, 0, "Verifying...")
+
+        self.verify_thread = _VerifyThread(
+            self.csv_path, col, self.fasta_files, self.nwk_files
+        )
+        self.verify_thread.finished.connect(self.on_verify_finished)
+        self.verify_thread.failed.connect(self.on_verify_failed)
+        self.verify_thread.start()
+
+    def on_verify_failed(self, error):
+        self.btn_verify.setEnabled(True)
+        self.progress_update.emit(RECON_JOB, 0, "Error Occurred")
+        self.log_msg.emit(f"[ERROR] Verification engine failure: {error}")
+        self._notify("Verification failed. Check system log.", RED)
+
+    def on_verify_finished(self, results):
+        self.btn_verify.setEnabled(True)
+        self.progress_update.emit(RECON_JOB, 100, "Verification complete")
+
+        total_mismatches = 0
+
+        def _build_blocks(res_list, category_section):
+            nonlocal total_mismatches
+            grouped = {}
+            for r in res_list:
+                key = (r[0], r[1])
+                grouped.setdefault(key, []).append(r)
+            for (src, fname), file_results in grouped.items():
+                block = ReconResultBlock(src, fname, file_results)
+                total_mismatches += len(block.corrections)
+                block.apply_requested.connect(self.apply_specific_block)
+                category_section.add_block(block)
+                self.result_blocks.append(block)
+
+        _build_blocks(results["CSV_FAS"], self.cat_csv_fas)
+        _build_blocks(results["CSV_NWK"], self.cat_csv_nwk)
+        _build_blocks(results["FAS_NWK"], self.cat_fas_nwk)
+        _build_blocks(results["NWK_FAS"], self.cat_nwk_fas)
+
+        self.results_scroll.show()
+        self.btn_apply.setEnabled(True)
+
+        self.log_msg.emit(
+            f"[SUCCESS] Verification Complete: Identified {total_mismatches} total discrepancies across all file pairs."
+        )
+
+        if total_mismatches == 0:
+            self._notify("Perfect Match! No changes required.", GREEN)
+        else:
+            self._notify(
+                f"Found {total_mismatches} mismatch(es). " f"Review and apply changes.",
+                BLUE,
             )
-
-            total_mismatches = 0
-
-            def _build_blocks(res_list, category_section):
-                nonlocal total_mismatches
-                grouped = {}
-                for r in res_list:
-                    key = (r[0], r[1])
-                    grouped.setdefault(key, []).append(r)
-                for (src, fname), file_results in grouped.items():
-                    block = ReconResultBlock(src, fname, file_results)
-                    total_mismatches += len(block.corrections)
-                    block.apply_requested.connect(self.apply_specific_block)
-                    category_section.add_block(block)
-                    self.result_blocks.append(block)
-
-            _build_blocks(results["CSV_FAS"], self.cat_csv_fas)
-            _build_blocks(results["CSV_NWK"], self.cat_csv_nwk)
-            _build_blocks(results["FAS_NWK"], self.cat_fas_nwk)
-            _build_blocks(results["NWK_FAS"], self.cat_nwk_fas)
-
-            self.results_scroll.show()
-            self.btn_apply.setEnabled(True)
-
-            self.log_msg.emit(
-                f"[SUCCESS] Verification Complete: Identified {total_mismatches} total discrepancies across all file pairs."
-            )
-
-            if total_mismatches == 0:
-                self.notify_lbl.setText("Perfect Match! No changes required.")
-                self.notify_lbl.setStyleSheet(
-                    "color: #34C759; font-weight: bold; border:none; background: transparent;"
-                )
-            else:
-                self.notify_lbl.setText(
-                    f"Found {total_mismatches} mismatch(es). Review and apply changes."
-                )
-                self.notify_lbl.setStyleSheet(
-                    "color: #0071E3; font-weight: bold; border:none; background: transparent;"
-                )
-            self.notify_lbl.show()
-
-        except Exception as e:
-            self.log_msg.emit(f"[ERROR] Verification engine failure: {e}")
-            self.notify_lbl.setText("Verification failed. Check system log.")
-            self.notify_lbl.setStyleSheet(
-                "color: #FF3B30; font-weight: bold; border:none; background: transparent;"
-            )
-            self.notify_lbl.show()
 
     def apply_specific_block(self, block):
         self.apply_changes(specific_block=block)
@@ -597,7 +697,6 @@ class Subtab5ReconUI(QWidget):
                 for f in self.fasta_files:
                     if Path(f).name == target_name and f not in target_fasta_files:
                         target_fasta_files.append(f)
-
             elif block.src in ["NWK", "FAS_NWK"]:
                 nwk_corrections.update(selected)
                 target_name = (
@@ -613,42 +712,54 @@ class Subtab5ReconUI(QWidget):
             )
             return
 
-        try:
-            self.log_msg.emit(
-                f"[PROCESS] Execution Started: Applying {len(fasta_corrections)} FASTA updates and {len(nwk_corrections)} NWK updates..."
-            )
-            self.progress_update.emit(
-                "Data_Reconciliation_Job", 10, "Initializing rewrite protocols..."
-            )
+        self.log_msg.emit(
+            f"[PROCESS] Execution Started: Applying {len(fasta_corrections)} FASTA updates and {len(nwk_corrections)} NWK updates..."
+        )
 
-            fs, ns, rs = t1_st5_logic.apply_and_save_reconciled(
-                target_fasta_files,
-                fasta_corrections,
-                target_nwk_files,
-                nwk_corrections,
-                blocks_to_process,
-            )
+        # Widgets are read here, on the GUI thread; the worker only ever sees the plain dict this produces
+        status_lookup = t1_st5_logic.build_status_lookup(
+            (b.fname, b.corrections) for b in blocks_to_process
+        )
 
-            self.progress_update.emit("Data_Reconciliation_Job", 100, "Completed")
+        self.applied_block = specific_block
+        self.btn_verify.setEnabled(False)
+        self.btn_apply.setEnabled(False)
+        self.progress_update.emit(RECON_JOB, 0, "Initializing rewrite protocols...")
 
-            msg = f"Reconciled files exported successfully. [{len(fs)} FASTA | {len(ns)} NWK | {len(rs)} Reports]"
-            if specific_block:
-                msg = f"Block applied: {specific_block.fname}. " + msg
+        self.apply_thread = _ApplyThread(
+            target_fasta_files,
+            fasta_corrections,
+            target_nwk_files,
+            nwk_corrections,
+            status_lookup,
+        )
+        self.apply_thread.progress.connect(self.on_apply_progress)
+        self.apply_thread.finished.connect(self.on_apply_finished)
+        self.apply_thread.failed.connect(self.on_apply_failed)
+        self.apply_thread.start()
 
-            self.log_msg.emit(f"[SUCCESS] {msg}")
-            self.notify_lbl.setText(
-                f"Successfully saved {len(fs)+len(ns)} reconciled files!"
-            )
-            self.notify_lbl.setStyleSheet(
-                "color: #34C759; font-weight: bold; border:none; background: transparent;"
-            )
-            self.notify_lbl.show()
+    def on_apply_progress(self, curr, tot):
+        val = int((curr / tot) * 100) if tot else 0
+        self.progress_update.emit(RECON_JOB, val, "Writing reconciled files...")
 
-        except Exception as e:
-            self.progress_update.emit("Data_Reconciliation_Job", 0, "Error Occurred")
-            self.log_msg.emit(f"[ERROR] File write operation failed: {e}")
-            self.notify_lbl.setText("Failed to save changes. Check system log.")
-            self.notify_lbl.setStyleSheet(
-                "color: #FF3B30; font-weight: bold; border:none; background: transparent;"
-            )
-            self.notify_lbl.show()
+    def on_apply_failed(self, error):
+        self.btn_verify.setEnabled(True)
+        self.btn_apply.setEnabled(True)
+        self.progress_update.emit(RECON_JOB, 0, "Error Occurred")
+        self.log_msg.emit(f"[ERROR] File write operation failed: {error}")
+        self._notify("Failed to save changes. Check system log.", RED)
+
+    def on_apply_finished(self, fs, ns, rs):
+        self.btn_verify.setEnabled(True)
+        self.btn_apply.setEnabled(True)
+        self.progress_update.emit(RECON_JOB, 100, "Completed")
+
+        msg = (
+            f"Reconciled files exported successfully. "
+            f"[{len(fs)} FASTA | {len(ns)} NWK | {len(rs)} Reports]"
+        )
+        if self.applied_block:
+            msg = f"Block applied: {self.applied_block.fname}. " + msg
+
+        self.log_msg.emit(f"[SUCCESS] {msg}")
+        self._notify(f"Successfully saved {len(fs) + len(ns)} reconciled files!", GREEN)
