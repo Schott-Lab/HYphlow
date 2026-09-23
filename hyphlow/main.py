@@ -26,16 +26,16 @@ from PyQt5.QtGui import QColor, QPixmap, QIcon
 from PyQt5.QtCore import Qt, QSettings, pyqtSignal, QTimer
 import qtawesome as qta
 
+from hyphlow import common_ui
+from hyphlow import manifest_logic_tab
 from hyphlow import t1_st1_logic
+from hyphlow.common_ui import LogConsole, message_box, open_path
 from hyphlow.t1_st1_ui import StandardizationPage
 from hyphlow.t1_st4_ui import Subtab4PruningUI
 from hyphlow.t1_st5_ui import Subtab5ReconUI
 from hyphlow.t2_tagging_ui import Tab2TaggingUI
 from hyphlow.t3_hyphy_ui import Tab3HyPhyUI
 from hyphlow.t4_summary_ui import Tab4SummaryUI
-from hyphlow import common_ui
-from hyphlow.common_ui import LogConsole, open_path, message_box
-from hyphlow import manifest_logic_tab
 
 
 def get_logo_path():
