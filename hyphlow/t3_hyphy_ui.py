@@ -1,11 +1,20 @@
+import datetime
 import os
-import re
+import shutil
 import sys
 import time
-import shutil
-import datetime
 import traceback
 from pathlib import Path
+
+import qtawesome as qta
+from PyQt5.QtCore import (
+    Qt,
+    QPoint,
+    pyqtSignal,
+    QPropertyAnimation,
+    QProcess,
+    QTimer,
+)
 from PyQt5.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -25,18 +34,8 @@ from PyQt5.QtWidgets import (
     QSizePolicy,
     QCheckBox,
 )
-from PyQt5.QtCore import (
-    Qt,
-    QPoint,
-    pyqtSignal,
-    QPropertyAnimation,
-    QProcess,
-    QTimer,
-)
-import qtawesome as qta
-from hyphlow import t3_hyphy_logic
-from hyphlow import common_utils
-from hyphlow import t1_st1_logic
+
+from hyphlow import common_utils, t1_st1_logic, t3_hyphy_logic
 from hyphlow.common_ui import (
     UnifiedDropZone,
     PrimaryButton,
@@ -44,18 +43,9 @@ from hyphlow.common_ui import (
     pick_save,
 )
 
-CONSENSUS_STEPS = ("Strict", "Majority", "Fitch", "Sankoff", "Felsenstein")
-
-
-def _tag_from_tree_name(tree_path):
-    """Tag between _annotated_ and the consensus-step marker, or "" if absent.
-
-    Read as a span rather than one token: a tag such as Freshwater_Fresh_Marine
-    contains underscores itself.
-    """
-    stem = Path(tree_path).stem
-    m = re.search(r"_annotated_(.+?)_(?:%s)" % "|".join(CONSENSUS_STEPS), stem)
-    return m.group(1) if m else ""
+# QProcess.kill() ends the shell with SIGKILL, so this code means the user
+# pressed Abort, not that the analysis failed.
+ABORT_EXIT_CODE = 9
 
 
 class Tab3HyPhyUI(QWidget):
@@ -69,10 +59,11 @@ class Tab3HyPhyUI(QWidget):
         super().__init__()
         self.fasta_files = []
         self.nwk_files = []
-        self.models = ["BUSTED", "aBSREL", "FEL", "MEME", "FUBAR", "RELAX"]
+        self.models = list(common_utils.HYPHY_MODELS)
         self.is_generating_script = False
         self.was_valid = True
         self.local_process = None
+        self.current_work_dir = None
         self.job_queue = []
         self.reaction_timer = QTimer(self)
         self.reaction_timer.timeout.connect(self.update_reaction_time)
@@ -82,6 +73,12 @@ class Tab3HyPhyUI(QWidget):
         self.spinner_idx = 0
         self.spinner_timer = QTimer(self)
         self.spinner_timer.timeout.connect(self.update_spinner)
+        # Syntax is checked after typing pauses, not on every keystroke: the
+        # check walks the whole script, which is hundreds of lines for a full
+        # queue.
+        self.syntax_timer = QTimer(self)
+        self.syntax_timer.setSingleShot(True)
+        self.syntax_timer.timeout.connect(self.check_syntax)
         self.total_jobs = 0
         self.completed_jobs = 0
         self.terminal_history = []
@@ -150,7 +147,7 @@ class Tab3HyPhyUI(QWidget):
             "Master Alignment (FASTA)",
             show_dropdown=False,
             file_type="fasta",
-            show_gene_input=False,
+            show_gene_input=True,
         )
         self.dz_fasta.files_updated.connect(self.handle_fasta_files)
         fc_layout.addWidget(self.dz_fasta)
@@ -164,7 +161,7 @@ class Tab3HyPhyUI(QWidget):
             "Target Phylogeny (NWK)",
             show_dropdown=False,
             file_type="nwk",
-            show_gene_input=False,
+            show_gene_input=True,
             default_subdir=("Results", "Tree_Annotation"),
         )
         self.dz_nwk.files_updated.connect(self.handle_nwk_files)
@@ -298,7 +295,7 @@ class Tab3HyPhyUI(QWidget):
             )
         )
         self.combo_method = QComboBox()
-        self.combo_method.addItems(self.models)
+        self.combo_method.addItems(common_utils.HYPHY_MODELS)
         self.combo_method.setStyleSheet("""
             QComboBox { border: 1px solid #D1D1D6; border-radius: 6px; padding: 4px 10px; background: #FFFFFF; font-weight: 500; font-size: 12px; color: #1D1D1F; min-width: 150px; }
             QComboBox::drop-down { border: none; }
@@ -441,7 +438,7 @@ class Tab3HyPhyUI(QWidget):
             "QTextEdit { background-color: #2D2D30; color: #D4D4D4; border: 1px solid #D1D1D6; border-radius: 8px; padding: 10px; }"
         )
         self.script_editor.setAcceptRichText(False)
-        self.script_editor.textChanged.connect(self.check_syntax)
+        self.script_editor.textChanged.connect(lambda: self.syntax_timer.start(300))
         ed_layout.addWidget(self.script_editor)
         right_splitter.addWidget(editor_card)
         progress_card = QFrame()
@@ -468,15 +465,22 @@ class Tab3HyPhyUI(QWidget):
         self.btn_abort.clicked.connect(self.abort_process)
         self.btn_abort.setEnabled(False)
         table_header.addWidget(self.btn_abort)
-        self.btn_export_zip = QPushButton("Export")
-        self.btn_export_zip.setStyleSheet("""
+        export_style = """
             QPushButton { background-color: #0071E3; color: white; font-size: 11px; font-weight: bold; border-radius: 6px; padding: 5px 12px; border: none; }
             QPushButton:hover { background-color: #005BB5; }
             QPushButton:disabled { background-color: #E5E5EA; color: #8E8E93; }
-        """)
+        """
+        self.btn_export_zip = QPushButton("Export")
+        self.btn_export_zip.setStyleSheet(export_style)
         self.btn_export_zip.clicked.connect(self.export_zip)
         self.btn_export_zip.setEnabled(False)
         table_header.addWidget(self.btn_export_zip)
+
+        self.btn_export_slurm = QPushButton("Export SLURM")
+        self.btn_export_slurm.setStyleSheet(export_style)
+        self.btn_export_slurm.clicked.connect(self.export_slurm)
+        self.btn_export_slurm.setEnabled(False)
+        table_header.addWidget(self.btn_export_slurm)
         br_layout.addLayout(table_header)
         self.progress_table = QTableWidget(0, 8)
         self.progress_table.setMinimumHeight(250)
@@ -605,35 +609,40 @@ class Tab3HyPhyUI(QWidget):
                 self.combo_target.addItem(f"[{disp_f}] {disp_t}", userData=p)
 
     def process_matching(self):
-        if not self.fasta_files or not self.nwk_files:
+        fasta_ids = self.dz_fasta.get_all_identities()
+        tree_ids = self.dz_nwk.get_all_identities()
+        if not fasta_ids or not tree_ids:
             return
+
         self.match_tree.blockSignals(True)
         self.match_tree.clear()
-        matched_dict = t3_hyphy_logic.get_matched_pairs(
-            self.fasta_files, self.nwk_files
-        )
-        for fasta_stem, data in matched_dict.items():
+        matched, unpaired = t3_hyphy_logic.get_matched_pairs(fasta_ids, tree_ids)
+
+        for data in matched.values():
             fasta_item = QTreeWidgetItem(self.match_tree)
             fasta_item.setText(0, f" {Path(data['fasta_path']).name}")
             for tree_data in data["trees"]:
                 tree_item = QTreeWidgetItem(fasta_item)
                 tree_item.setFlags(tree_item.flags() | Qt.ItemIsUserCheckable)
-                is_valid = tree_data["is_valid"]
-                if is_valid:
+                tree_item.setText(0, f" {Path(tree_data['nwk_path']).name}")
+
+                if tree_data["is_valid"]:
                     tree_item.setCheckState(0, Qt.Checked)
-                    tree_item.setText(0, f" {Path(tree_data['nwk_path']).name}")
                     badge = self.create_status_badge("Matched", "#EBF9EE", "#34C759")
-                    self.match_tree.setItemWidget(tree_item, 2, badge)
                 else:
                     tree_item.setCheckState(0, Qt.Unchecked)
-                    tree_item.setText(0, f" {Path(tree_data['nwk_path']).name}")
                     badge = self.create_status_badge("Mismatch", "#FFF9E5", "#FF9500")
-                    self.match_tree.setItemWidget(tree_item, 2, badge)
+                # The badge says only pass or fail; which taxa differ is in the
+                # tooltip so it does not crowd the row.
+                badge.setToolTip(tree_data["error_msg"])
+                self.match_tree.setItemWidget(tree_item, 2, badge)
+
                 if tree_data["has_fg"]:
                     fg_badge = self.create_status_badge("FG", "#F2F2F7", "#1D1D1F")
                     self.match_tree.setItemWidget(tree_item, 1, fg_badge)
                 else:
                     tree_item.setText(1, "")
+
                 tree_item.setData(
                     0,
                     Qt.UserRole,
@@ -644,10 +653,17 @@ class Tab3HyPhyUI(QWidget):
                     },
                 )
             fasta_item.setExpanded(True)
+
         self.match_tree.blockSignals(False)
         self.update_target_combo()
-        self.input_content_area.hide()
-        self.btn_toggle_input.setIcon(qta.icon("mdi.chevron-down", color="#1D1D1F"))
+
+        # A file that paired with nothing is named here rather than left out of
+        # the tree, where its absence reads as "nothing was dropped".
+        for path, reason in unpaired:
+            self.log_msg.emit(f"[WARNING] {Path(path).name}: {reason}")
+        if matched:
+            self.input_content_area.hide()
+            self.btn_toggle_input.setIcon(qta.icon("mdi.chevron-down", color="#1D1D1F"))
         self.match_tree.show()
         self.btn_toggle_match.setIcon(qta.icon("mdi.chevron-up", color="#1D1D1F"))
 
@@ -692,7 +708,7 @@ class Tab3HyPhyUI(QWidget):
             self.queue_table.insertRow(row)
 
             gene = t3_hyphy_logic._gene_from_stem(Path(job["tree"]).stem) or "?"
-            tag = _tag_from_tree_name(job["tree"]) or "—"
+            tag = common_utils.tag_from_tree_name(job["tree"]) or "—"
             values = [
                 gene,
                 Path(job["fasta"]).stem,
@@ -821,6 +837,7 @@ class Tab3HyPhyUI(QWidget):
             self.btn_run_hyphy.set_state("error", " Syntax Error", "mdi.alert")
             self.btn_run_hyphy.setToolTip(f"Error: {errors[0]}")
             self.btn_export_zip.setEnabled(False)
+            self.btn_export_slurm.setEnabled(False)
             self.btn_run_hyphy.setEnabled(False)
             if self.was_valid and self.job_queue:
                 self.trigger_shake_animation()
@@ -829,6 +846,7 @@ class Tab3HyPhyUI(QWidget):
             self.btn_run_hyphy.set_state("run", " Run HyPhy Execution", "mdi.play")
             self.btn_run_hyphy.setToolTip("")
             self.btn_export_zip.setEnabled(True)
+            self.btn_export_slurm.setEnabled(True)
             self.btn_run_hyphy.setEnabled(True)
             self.was_valid = True
 
@@ -856,9 +874,7 @@ class Tab3HyPhyUI(QWidget):
             )
             return
 
-        exec_root = common_utils.get_pipeline_path(
-            t1_st1_logic.CURRENT_PROJECT_PATH, "Results", "JSON"
-        )
+        exec_root = common_utils.get_hyphy_path(t1_st1_logic.CURRENT_PROJECT_PATH)
         if not exec_root:
             self.log_msg.emit(
                 "[ERROR] No workspace selected.\nSolution: Please set a project workspace in the Dashboard first."
@@ -907,12 +923,26 @@ class Tab3HyPhyUI(QWidget):
         work_dir = exec_root / f"Run_{timestamp}"
         work_dir.mkdir(parents=True, exist_ok=True)
 
+        # The script refers to files by name, so two files with one name would
+        # collapse into one here and both tasks would run on whichever landed
+        # first. A missing file is named now rather than at HyPhy's error.
+        copied = {}
         for job in self.job_queue:
             for f in [job["fasta"], job["tree"]]:
                 src = Path(f)
-                dst = work_dir / src.name
-                if src.exists() and not dst.exists():
-                    shutil.copy2(src, dst)
+                if not src.exists():
+                    self.log_msg.emit(f"[ERROR] File not found: {f}")
+                    return
+                if copied.get(src.name, f) != f:
+                    self.log_msg.emit(
+                        f"[ERROR] Two different files are both named {src.name}. "
+                        "Rename one of them before running."
+                    )
+                    return
+                copied[src.name] = f
+
+        for name, source in copied.items():
+            shutil.copy2(source, work_dir / name)
 
         script_path = work_dir / "run_hyphy_local.sh"
         with open(script_path, "w", encoding="utf-8", newline="\n") as f:
@@ -990,72 +1020,42 @@ class Tab3HyPhyUI(QWidget):
             self.wsl_msg.emit(ls)
             self.terminal_history.append(ls)
 
-            if ls.startswith("===REACTION_START==="):
-                parts = ls.split("===")
-                if len(parts) >= 6:
-                    key = f"{parts[2]}==={parts[3]}==={parts[4]}==={parts[5]}"
-                    if key in self.task_map:
-                        row = self.task_map[key]
-                        self.active_tasks[row] = time.time()
-                        if not self.reaction_timer.isActive():
-                            self.reaction_timer.start(1000)
-                        self.progress_table.item(row, 4).setText(
-                            datetime.datetime.now().strftime("%H:%M:%S")
-                        )
-                        self.update_badge(row, "Running", "#FFF9E5", "#FF9500")
+            parts = ls.split("===")
+            if len(parts) < 7 or not parts[1].startswith("REACTION_"):
+                continue
+            row = self.task_map.get(
+                f"{parts[2]}==={parts[3]}==={parts[4]}==={parts[5]}"
+            )
+            if row is None:
+                continue
 
-            elif ls.startswith("===REACTION_DONE==="):
-                parts = ls.split("===")
-                if len(parts) >= 6:
-                    key = f"{parts[2]}==={parts[3]}==={parts[4]}==={parts[5]}"
-                    if key in self.task_map:
-                        row = self.task_map[key]
-                        if row in self.active_tasks:
-                            del self.active_tasks[row]
-                        self.progress_table.item(row, 5).setText(
-                            datetime.datetime.now().strftime("%H:%M:%S")
-                        )
-                        self.update_badge(row, "Completed", "#E5F0FF", "#0071E3")
-                        self.completed_jobs += 1
-                        pct = int((self.completed_jobs / max(1, self.total_jobs)) * 100)
-                        self.progress_update.emit("Batch Execution", pct, "Running...")
+            if parts[1] == "REACTION_START":
+                self.active_tasks[row] = time.time()
+                if not self.reaction_timer.isActive():
+                    self.reaction_timer.start(1000)
+                self.progress_table.item(row, 4).setText(self._now())
+                self.update_badge(row, "Running", "#FFF9E5", "#FF9500")
+                continue
 
-            elif ls.startswith("===REACTION_ERROR==="):
-                parts = ls.split("===")
-                if len(parts) >= 6:
-                    key = f"{parts[2]}==={parts[3]}==={parts[4]}==={parts[5]}"
-                    if key in self.task_map:
-                        row = self.task_map[key]
-                        if row in self.active_tasks:
-                            del self.active_tasks[row]
-                        self.progress_table.item(row, 5).setText(
-                            datetime.datetime.now().strftime("%H:%M:%S")
-                        )
-                        self.update_badge(row, "Failed", "#FFECEB", "#FF3B30")
-                        self.completed_jobs += 1
-                        pct = int((self.completed_jobs / max(1, self.total_jobs)) * 100)
-                        self.progress_update.emit("Batch Execution", pct, "Running...")
+            self.active_tasks.pop(row, None)
+            if not self.active_tasks:
+                self.reaction_timer.stop()
+            self.progress_table.item(row, 5).setText(self._now())
+            self.completed_jobs += 1
+            pct = int((self.completed_jobs / max(1, self.total_jobs)) * 100)
+            self.progress_update.emit("Batch Execution", pct, "Running...")
 
-                        extracted_error = ""
-                        if hasattr(self, "current_work_dir"):
-                            err_log = Path(self.current_work_dir) / "errors.log"
-                            if err_log.exists():
-                                try:
-                                    with open(err_log, "r", encoding="utf-8") as f:
-                                        content = f.read().strip()
-                                        if content:
-                                            extracted_error = (
-                                                f"\n[EXTRACTED ERRORS.LOG]\n{content}"
-                                            )
-                                except Exception:
-                                    pass
-
-                        msg = f"[ERROR] Task execution failed for {parts[2]} (Model: {parts[4]})."
-                        if extracted_error:
-                            msg += extracted_error
-                        else:
-                            msg += " Please check the terminal logs."
-                        self.log_msg.emit(msg)
+            if parts[1] == "REACTION_DONE":
+                self.update_badge(row, "Completed", "#E5F0FF", "#0071E3")
+            else:
+                self.update_badge(row, "Failed", "#FFECEB", "#FF3B30")
+                msg = (
+                    f"[ERROR] Task execution failed for {parts[2]} "
+                    f"(Model: {parts[4]})."
+                )
+                self.log_msg.emit(
+                    msg + (self._error_log_tail() or " Please check the terminal logs.")
+                )
 
     def update_badge(self, row, status, bg, fg):
         lbl = self.progress_table.item(row, 0).data(Qt.UserRole)
@@ -1065,8 +1065,23 @@ class Tab3HyPhyUI(QWidget):
                 f"background-color: {bg}; color: {fg}; border-radius: 4px; font-weight: 800; font-size: 10px; padding: 2px 6px; border: none;"
             )
 
+    def _now(self):
+        return datetime.datetime.now().strftime("%H:%M:%S")
+
+    # The same errors.log is read when one task fails and when the whole run
+    # fails, so both paths report the same text.
+    def _error_log_tail(self):
+        if not self.current_work_dir:
+            return ""
+        err_log = Path(self.current_work_dir) / "errors.log"
+        try:
+            content = err_log.read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
+        return f"\n[EXTRACTED ERRORS.LOG]\n{content}" if content else ""
+
     def update_reaction_time(self):
-        for row, st in self.active_tasks.items():
+        for row, st in list(self.active_tasks.items()):
             el = int(time.time() - st)
             m, s = divmod(el, 60)
             self.progress_table.item(row, 6).setText(f"{m:02d}:{s:02d}")
@@ -1089,99 +1104,99 @@ class Tab3HyPhyUI(QWidget):
             self.wsl_msg.emit("\n[SYSTEM] All HyPhy jobs finished successfully!")
             self.progress_update.emit("Batch Execution", 100, "Completed")
             self.log_msg.emit("[SUCCESS] HyPhy Analysis Completed successfully!")
-            if hasattr(self, "current_work_dir"):
+            if self.current_work_dir:
                 self.log_msg.emit(f"[INFO] Results saved to: {self.current_work_dir}")
+            self._write_run_log()
 
-            if t1_st1_logic.CURRENT_PROJECT_PATH:
-                try:
-                    full_log = (
-                        "\n".join(self.terminal_history)
-                        if hasattr(self, "terminal_history")
-                        else ""
-                    )
-                    mmdd = datetime.datetime.now().strftime("%m%d")
-                    log_dir = (
-                        Path(t1_st1_logic.CURRENT_PROJECT_PATH)
-                        / "Reports"
-                        / "System_Logs"
-                    )
-                    log_dir.mkdir(parents=True, exist_ok=True)
-                    log_file = log_dir / f"log_report_{mmdd}.txt"
-                    with open(log_file, "a", encoding="utf-8") as f:
-                        f.write(f"\n{'='*50}\n")
-                        f.write(
-                            f"[HYPHY EXECUTION FULL LOG] {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-                        )
-                        f.write(f"{'='*50}\n")
-                        f.write(full_log + "\n\n")
-                except Exception as e:
-                    self.log_msg.emit(f"[ERROR] Failed to embed terminal log: {str(e)}")
-
-        elif code != 9:
+        elif code != ABORT_EXIT_CODE:
             self.wsl_msg.emit(f"\n[SYSTEM] Job failed with exit code {code}")
             self.progress_update.emit("Batch Execution", 0, "Failed")
-
-            last_words = (
-                "\n".join(self.terminal_history[-20:])
-                if hasattr(self, "terminal_history")
-                else ""
-            )
-
-            extracted_error = ""
-            if hasattr(self, "current_work_dir"):
-                err_log = Path(self.current_work_dir) / "errors.log"
-                if err_log.exists():
-                    try:
-                        with open(err_log, "r", encoding="utf-8") as f:
-                            content = f.read().strip()
-                            if content:
-                                extracted_error = f"\n[EXTRACTED ERRORS.LOG]\n{content}"
-                    except Exception:
-                        pass
 
             err_summary = (
                 f"[ERROR] Bash Execution Failed (Exit Code: {code})\n"
                 f"[TRACEBACK] Last output before crash:\n"
-                f">>>\n{last_words}\n<<<\n"
+                f">>>\n{chr(10).join(self.terminal_history[-20:])}\n<<<\n"
             )
-
-            if extracted_error:
-                err_summary += extracted_error
-            else:
-                err_summary += "[HINT] The process might be waiting for user input. Check your script for missing arguments."
-
+            err_summary += self._error_log_tail() or (
+                "[HINT] The process might be waiting for user input. "
+                "Check your script for missing arguments."
+            )
             self.log_msg.emit(err_summary)
 
-            if t1_st1_logic.CURRENT_PROJECT_PATH:
-                try:
-                    full_log = (
-                        "\n".join(self.terminal_history)
-                        if hasattr(self, "terminal_history")
-                        else ""
-                    )
-                    mmdd = datetime.datetime.now().strftime("%m%d_%H%M%S")
-                    err_dir = (
-                        Path(t1_st1_logic.CURRENT_PROJECT_PATH)
-                        / "Reports"
-                        / "Error_Reports"
-                    )
-                    err_dir.mkdir(parents=True, exist_ok=True)
-                    crash_file = err_dir / f"HYphlow_Bash_Crash_Log_{mmdd}.txt"
-                    with open(crash_file, "w", encoding="utf-8") as f:
-                        f.write(
-                            err_summary + "\n\n=== FULL TERMINAL LOG ===\n" + full_log
-                        )
-                    self.log_msg.emit(f"[INFO] Full crash log saved to: {crash_file}")
-                except Exception as e:
-                    self.log_msg.emit(f"[ERROR] Failed to save crash log: {str(e)}")
+            saved = common_utils.log_error_to_file(
+                t1_st1_logic.CURRENT_PROJECT_PATH,
+                "Tab 3",
+                err_summary
+                + "\n\n=== FULL TERMINAL LOG ===\n"
+                + "\n".join(self.terminal_history),
+            )
+            if saved:
+                self.log_msg.emit(f"[INFO] Full crash log saved to: {saved}")
+
+    def _write_run_log(self):
+        if not t1_st1_logic.CURRENT_PROJECT_PATH:
+            return
+        log_dir = (
+            Path(t1_st1_logic.CURRENT_PROJECT_PATH)
+            / common_utils.REPORTS
+            / "System_Logs"
+        )
+        try:
+            log_dir.mkdir(parents=True, exist_ok=True)
+            with open(
+                log_dir / f"log_report_{common_utils.mmdd()}.txt",
+                "a",
+                encoding="utf-8",
+            ) as f:
+                f.write(f"\n{'=' * 50}\n")
+                f.write(f"[HYPHY EXECUTION FULL LOG] {common_utils.timestamp()}\n")
+                f.write(f"{'=' * 50}\n")
+                f.write("\n".join(self.terminal_history) + "\n\n")
+        except OSError as e:
+            self.log_msg.emit(f"[ERROR] Failed to embed terminal log: {e}")
 
     def export_zip(self):
         save_path = pick_save(
             self, "Save Export Package", "HyPhy_Job.zip", "ZIP Files (*.zip)"
         )
-        if save_path:
-            script = self.script_editor.toPlainText()
-            t3_hyphy_logic.export_job_to_zip(self.job_queue, script, save_path)
+        if not save_path:
+            return
+        ok, message = t3_hyphy_logic.export_job_to_zip(
+            self.job_queue, self.script_editor.toPlainText(), save_path
+        )
+        self.log_msg.emit(f"[{'SUCCESS' if ok else 'ERROR'}] {message}")
+
+    def export_slurm(self):
+        save_path = pick_save(
+            self, "Save SLURM Script", "hyphlow_slurm.sh", "Shell Scripts (*.sh)"
+        )
+        if not save_path:
+            return
+
+        # Built from the queue, not from the editor: the local script manages
+        # its own worker pool, which would fight the scheduler on a cluster.
+        script = t3_hyphy_logic.generate_slurm_script(
+            self.job_queue,
+            self.chk_triplicate.isChecked(),
+            cpus_per_task=int(self.combo_min_cpu.currentText()),
+        )
+        if not script:
             self.log_msg.emit(
-                f"[SUCCESS] Export Package ZIP created 지 successfully at: {save_path}"
+                "[ERROR] No task in the queue can run: check the FG tags on the "
+                "trees you selected."
             )
+            return
+
+        try:
+            with open(save_path, "w", encoding="utf-8", newline="\n") as f:
+                f.write(script)
+        except OSError as e:
+            self.log_msg.emit(f"[ERROR] Could not save the SLURM script: {e}")
+            return
+
+        self.log_msg.emit(f"[SUCCESS] SLURM array script saved to: {save_path}")
+        self.log_msg.emit(
+            "[INFO] Open the script and edit the lines marked TODO before "
+            "submitting: wall time, memory, and how HyPhy is loaded on your "
+            "cluster. Then submit it with: sbatch <script>"
+        )
