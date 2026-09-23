@@ -10,8 +10,6 @@ dependencies:
   - biopython
   - xlsxwriter
   - rapidfuzz
-  - matplotlib
-  - seaborn
   - pyqt
   - pip
   - pip:
