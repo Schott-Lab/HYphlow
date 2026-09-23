@@ -1,57 +1,402 @@
-import re
 import json
-import datetime
+import re
 import traceback
 from pathlib import Path
-import pandas as pd
-import matplotlib
 
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import seaborn as sns
-from PyQt5.QtCore import QThread, pyqtSignal
+import pandas as pd
 from PyQt5.QtCore import QThread, pyqtSignal
 
 from hyphlow import common_utils
-from hyphlow.t2_tagging_logic import STEP_NAMES
+
+# =========================================================== constants
+
+# Shown in the report when a result carries no foreground tag, which is what a
+# tree that never passed through Tab 2 looks like: every branch was tested.
+UNTAGGED = "All branches"
+
+# Analyses that test one site at a time rather than the alignment as a whole.
+SITE_MODELS = ("FEL", "MEME", "FUBAR")
+
+P_THRESHOLD = 0.05
+# FUBAR reports a posterior probability instead of a p-value.
+POSTERIOR_THRESHOLD = 0.9
+
+SHEET_MASTER = "p-value summary"
+SHEET_SITES = "Site_Models"
+
+# A result file ends in the analysis that produced it, and that tail is what
+# the gene scan would otherwise land on.
+RESULT_TAIL_RE = re.compile(
+    r"_(?:%s)(?:_run\d+)?$" % "|".join(map(re.escape, common_utils.HYPHY_MODELS)),
+    re.IGNORECASE,
+)
+RUN_TAIL_RE = re.compile(r"_run(\d+)$", re.IGNORECASE)
+# Characters a file name cannot hold on Windows.
+UNSAFE_NAME_RE = re.compile(r'[\\/*?:"<>|]')
 
 
-def _identity_from_json_name(json_name):
-    """Recover (organism, gene, tag) from a HyPhy result filename.
+# ======================================================== file identity
 
-    Names look like ORGANISM_GENE_annotated_TAG_Strict_Consensus_v1_0801_MODEL.
-    The tag may itself contain underscores, so it is read as everything between
-    _annotated_ and the consensus-step marker rather than as a single token.
-    """
+
+def _safe_prefix(custom_name):
+    clean = UNSAFE_NAME_RE.sub("", (custom_name or "").strip())
+    return f"HYphlow_{clean}_" if clean else "HYphlow_"
+
+
+# Tab 2 names annotated trees GENE_annotated_TAG_STEP_v1_0801.nwk and HyPhy
+# appends _MODEL(_runN), so the organism and gene sit before _annotated_.
+def identity_from_json_name(json_name):
     stem = Path(json_name).stem
+    tag = common_utils.tag_from_tree_name(json_name) or UNTAGGED
+    head = RESULT_TAIL_RE.sub("", stem.split("_annotated_")[0])
 
-    tag = "UNPARSED"
-    m = re.search(r"_annotated_(.+?)_(?:%s)" % "|".join(STEP_NAMES), stem)
-    if m:
-        tag = m.group(1)
-        head = stem[: m.start()]
-    else:
-        head = re.split(r"_annotated_", stem)[0]
-
-    # head is ORGANISM_GENE. The gene is the uppercase token; whatever comes
-    # before it is the organism.
     tokens = [t for t in head.split("_") if t]
-    gene, organism = "", ""
-    for i, t in enumerate(tokens):
-        if common_utils._is_gene_like(t):
-            gene = t.upper()
-            organism = "_".join(tokens[:i])
-            break
-    if not gene and tokens:
-        gene = tokens[-1].upper()
-        organism = "_".join(tokens[:-1])
+    i = common_utils.gene_token_index(tokens)
+    if i >= 0:
+        return "_".join(tokens[:i]), tokens[i], tag
+    if tokens:
+        return "_".join(tokens[:-1]), tokens[-1].upper(), tag
+    return "", "", tag
 
-    return organism, gene, tag
+
+# Read from the end of the name, not by searching the whole of it: the step
+# name Felsenstein contains FEL, so a MEME result on a Felsenstein tree used to
+# be recorded as FEL.
+def model_from_json_name(json_name):
+    stem = RUN_TAIL_RE.sub("", Path(json_name).stem)
+    token = stem.rsplit("_", 1)[-1].upper()
+    return common_utils.HYPHY_MODEL_TOKENS.get(token, "")
+
+
+def model_from_analysis_info(data):
+    info = (data.get("analysis", {}) or {}).get("info", "") or ""
+    for token, name in common_utils.HYPHY_MODEL_TOKENS.items():
+        if token in info.upper():
+            return name
+    return ""
+
+
+def run_id_from_name(json_name):
+    stem = Path(json_name).stem
+    m = RUN_TAIL_RE.search(stem)
+    return (RUN_TAIL_RE.sub("", stem), int(m.group(1))) if m else (stem, 1)
+
+
+# ========================================================= json parsing
+
+
+# None when the file carries no AIC-c at all, which is normal for FUBAR.
+def _aic(data):
+    fits = data.get("fits", {}) or {}
+    ordered = [
+        fits[n] for n in ("Unconstrained model", "RELAX alternative") if n in fits
+    ]
+    ordered += [v for v in fits.values() if isinstance(v, dict)]
+    for fit in ordered:
+        score = fit.get("AIC-c")
+        if isinstance(score, (int, float)):
+            return score
+    return None
+
+
+def _omega_3(dist):
+    # The third rate class is keyed "2"; RELAX nests it under the branch set.
+    if not isinstance(dist, dict):
+        return ""
+    target = dist.get("2")
+    if not isinstance(target, dict):
+        nested = dist.get("Test")
+        target = nested.get("2") if isinstance(nested, dict) else None
+    if not isinstance(target, dict) and dist:
+        last = dist[list(dist)[-1]]
+        target = last if isinstance(last, dict) else None
+    if not isinstance(target, dict):
+        return ""
+    if "omega" not in target or "proportion" not in target:
+        return ""
+    return f"{target['omega']:.4f} ({target['proportion'] * 100:.2f}%)"
+
+
+def _test_pvalue(data):
+    results = data.get("test results", {}) or {}
+    pval = results.get("p-value", results.get("P-value", ""))
+    return pval if isinstance(pval, (int, float)) else ""
+
+
+def _significant(pval):
+    return "Significant" if pval != "" and pval < P_THRESHOLD else "Not Significant"
+
+
+def _parse_busted(data, common):
+    rows = []
+    pval = _test_pvalue(data)
+    verdict = _significant(pval)
+    fits = data.get("fits", {}) or {}
+
+    for sub_model in ("Unconstrained model", "Constrained model"):
+        fit = fits.get(sub_model, {}) or {}
+        dists = fit.get("Rate Distributions", {}) or {}
+        by_branch = {
+            "Tested": dists.get("Test", {}),
+            "Background": dists.get("Background", {}),
+            "Synonymous": dists.get("Synonymous", dists.get("Synonymous rates", {})),
+        }
+        for branch_set, dist in by_branch.items():
+            row = dict(common)
+            row.update(
+                {
+                    "Model": "BUSTED",
+                    "Sub_Model": sub_model,
+                    "Distribution": branch_set,
+                    "Log(L)": fit.get("Log Likelihood", ""),
+                    "AIC-c": fit.get("AIC-c", ""),
+                    "Params": fit.get("estimated parameters", ""),
+                    "p-value": pval,
+                    "Significance": verdict,
+                    "Omega_3": _omega_3(dist),
+                }
+            )
+            rows.append(row)
+    return rows, pval, verdict
+
+
+def _parse_relax(data, common):
+    rows = []
+    pval = _test_pvalue(data)
+    verdict = _significant(pval)
+    fits = data.get("fits", {}) or {}
+    k_value = (data.get("test results", {}) or {}).get(
+        "relaxation or intensification parameter", ""
+    )
+    if isinstance(k_value, (int, float)):
+        pattern = "Intensification" if k_value > 1 else "Relaxation"
+    else:
+        pattern = ""
+
+    for sub_model in ("RELAX null", "RELAX alternative"):
+        fit = fits.get(sub_model, {}) or {}
+        dists = fit.get("Rate Distributions", {}) or {}
+        for branch_set in ("Reference", "Test"):
+            row = dict(common)
+            row.update(
+                {
+                    "Model": "RELAX",
+                    "Sub_Model": sub_model,
+                    "Branch": branch_set,
+                    "Log(L)": fit.get("Log Likelihood", ""),
+                    "AIC-c": fit.get("AIC-c", ""),
+                    "Params": fit.get("estimated parameters", ""),
+                    "p-value": pval,
+                    "Significance": verdict,
+                    "K_Value": k_value,
+                    "Selection": pattern,
+                    "Omega_3": _omega_3(dists.get(branch_set, {})),
+                }
+            )
+            rows.append(row)
+    return rows, pval, verdict
+
+
+def _parse_absrel(data, common):
+    # aBSREL tests each lineage separately, so the alignment as a whole has no
+    # p-value. The verdict is whether any lineage came out significant.
+    results = data.get("test results", {}) or {}
+    tested = results.get("tested", 0)
+    positive = results.get("positive test results", 0)
+
+    attributes = data.get("branch attributes", {}) or {}
+    branches = {}
+    for value in attributes.values():
+        if isinstance(value, dict):
+            branches = value
+            break
+
+    named = [
+        node
+        for node, attr in branches.items()
+        if isinstance(attr, dict)
+        and isinstance(attr.get("Corrected P-value"), (int, float))
+        and attr["Corrected P-value"] < P_THRESHOLD
+    ]
+
+    verdict = "Significant" if named else "Not Significant"
+    row = dict(common)
+    row.update(
+        {
+            "Model": "aBSREL",
+            "Tested Lineages": tested,
+            "Positive Lineages": positive,
+            "Significant Branches": ", ".join(sorted(named)),
+            "Significance": verdict,
+        }
+    )
+    return [row], "", verdict
+
+
+def _parse_sites(data, common, model):
+    # Site methods test one codon at a time, so the verdict is whether any site
+    # came out significant rather than one p-value for the alignment.
+    mle = data.get("MLE", {}) or {}
+    headers = mle.get("headers", []) or []
+    content = []
+    for value in (mle.get("content", {}) or {}).values():
+        if isinstance(value, list):
+            content = value
+            break
+
+    column = -1
+    label = ""
+    for i, header in enumerate(headers):
+        text = str(header[0]).lower() if header else ""
+        if "p-value" in text or "posterior" in text:
+            column, label = i, text
+            break
+
+    named = []
+    if column >= 0:
+        for i, site in enumerate(content, start=1):
+            value = site[column] if column < len(site) else None
+            if not isinstance(value, (int, float)):
+                continue
+            if "posterior" in label:
+                if value >= POSTERIOR_THRESHOLD:
+                    named.append(str(i))
+            elif value < P_THRESHOLD:
+                named.append(str(i))
+
+    verdict = "Significant" if named else "Not Significant"
+    row = dict(common)
+    row.update(
+        {
+            "Model": model,
+            "Tested Sites": len(content),
+            "Significant Sites Count": len(named),
+            "Significant Sites List": ", ".join(named),
+            "Significance": verdict,
+        }
+    )
+    return [row], "", verdict
+
+
+def parse_result(data, common, model):
+    if model == "BUSTED":
+        return _parse_busted(data, common)
+    if model == "RELAX":
+        return _parse_relax(data, common)
+    if model == "aBSREL":
+        return _parse_absrel(data, common)
+    if model in SITE_MODELS:
+        return _parse_sites(data, common, model)
+    raise ValueError(f"No reader for model {model}.")
+
+
+# ========================================================= excel report
+
+FMT_HEADER = {"bold": True, "bg_color": "#FAFAFA", "border": 1}
+FMT_SIGNIFICANT = {"bg_color": "#FFFF99", "font_color": "#FF0000"}
+FMT_BEST_AIC = {"bg_color": "#E5FFE5"}
+FMT_FILE_BREAK = {"bottom": 2}
+FMT_SUBMODEL_BREAK = {"bottom": 1}
+
+
+def _write_header(worksheet, columns, fmt, width=15):
+    for i, name in enumerate(columns):
+        worksheet.write(0, i, name, fmt)
+        worksheet.set_column(i, i, max(len(str(name)) + 5, width))
+
+
+def _write_master(writer, formats, master_data):
+    # reset_index: sort_values keeps the original labels, and the labels are
+    # what the row numbers below would otherwise be taken from.
+    frame = pd.DataFrame(master_data).sort_values(by="Model").reset_index(drop=True)
+    frame.to_excel(writer, sheet_name=SHEET_MASTER, index=False)
+    worksheet = writer.sheets[SHEET_MASTER]
+    _write_header(worksheet, frame.columns, formats["header"])
+
+    aic_columns = [c for c in frame.columns if c.startswith("AIC_Run")]
+    for i, row in frame.iterrows():
+        line = i + 1
+        pval = row.get("p-value", "")
+        if isinstance(pval, (int, float)) and pval < P_THRESHOLD:
+            worksheet.write(
+                line, frame.columns.get_loc("p-value"), pval, formats["significant"]
+            )
+        if row.get("Significance") == "Significant":
+            worksheet.write(
+                line,
+                frame.columns.get_loc("Significance"),
+                row["Significance"],
+                formats["significant"],
+            )
+
+        values = [row[c] for c in aic_columns if isinstance(row[c], (int, float))]
+        if values:
+            best = min(values)
+            for c in aic_columns:
+                if row[c] == best:
+                    worksheet.write(
+                        line, frame.columns.get_loc(c), row[c], formats["best_aic"]
+                    )
+
+        if i < len(frame) - 1 and row["Model"] != frame.at[i + 1, "Model"]:
+            worksheet.set_row(line, None, formats["file_break"])
+
+
+def _write_model_sheet(writer, formats, sheet_name, rows):
+    frame = pd.DataFrame(rows)
+    frame.to_excel(writer, sheet_name=sheet_name, index=False)
+    worksheet = writer.sheets[sheet_name]
+    _write_header(worksheet, frame.columns, formats["header"])
+
+    previous = (None, None)
+    for i, row in frame.iterrows():
+        line = i + 1
+        pval = row.get("p-value", "")
+        if isinstance(pval, (int, float)) and pval < P_THRESHOLD:
+            if "p-value" in frame.columns:
+                worksheet.write(
+                    line, frame.columns.get_loc("p-value"), pval, formats["significant"]
+                )
+        if row.get("Significance") == "Significant" and "Significance" in frame.columns:
+            worksheet.write(
+                line,
+                frame.columns.get_loc("Significance"),
+                row["Significance"],
+                formats["significant"],
+            )
+
+        current = (row.get("File Name", ""), row.get("Sub_Model", ""))
+        if i > 0:
+            if current[0] != previous[0]:
+                worksheet.set_row(line - 1, None, formats["file_break"])
+            elif current[1] != previous[1]:
+                worksheet.set_row(line - 1, None, formats["submodel_break"])
+        previous = current
+
+
+def write_report(save_path, master_data, rows_by_model):
+    with pd.ExcelWriter(save_path, engine="xlsxwriter") as writer:
+        book = writer.book
+        formats = {
+            "header": book.add_format(FMT_HEADER),
+            "significant": book.add_format(FMT_SIGNIFICANT),
+            "best_aic": book.add_format(FMT_BEST_AIC),
+            "file_break": book.add_format(FMT_FILE_BREAK),
+            "submodel_break": book.add_format(FMT_SUBMODEL_BREAK),
+        }
+        _write_master(writer, formats, master_data)
+        for sheet_name, rows in rows_by_model.items():
+            if rows:
+                _write_model_sheet(writer, formats, sheet_name, rows)
+
+
+# =============================================================== worker
 
 
 class SummaryExportThread(QThread):
     progress_update = pyqtSignal(int, str)
-    finished = pyqtSignal(dict)
+    # Not "finished": QThread has a signal of that name already.
+    export_done = pyqtSignal(dict)
 
     def __init__(self, json_files, output_dir, custom_name=""):
         super().__init__()
@@ -59,375 +404,131 @@ class SummaryExportThread(QThread):
         self.output_dir = Path(output_dir)
         self.custom_name = custom_name
 
-    def _extract_omega_3(self, dist_dict):
-        try:
-            target = dist_dict.get("2", dist_dict.get("Test", {}).get("2", {}))
-            if not target and isinstance(dist_dict, dict):
-                keys = list(dist_dict.keys())
-                if len(keys) >= 3:
-                    target = dist_dict[keys[-1]]
-                elif len(keys) > 0:
-                    target = dist_dict[keys[-1]]
-
-            if (
-                isinstance(target, dict)
-                and "omega" in target
-                and "proportion" in target
-            ):
-                om = target["omega"]
-                pr = target["proportion"] * 100
-                return f"{om:.4f} ({pr:.2f}%)"
-            return ""
-        except Exception:
-            return ""
-
-    def _create_master_folder_and_excel_path(self):
-        clean_custom = re.sub(r'[\\/*?:"<>|]', "", self.custom_name.strip())
-        prefix = f"HYphlow_{clean_custom}_" if clean_custom else "HYphlow_"
-        mmdd = datetime.datetime.now().strftime("%m%d")
-        v_num = 1
-
+    def _report_paths(self):
+        prefix = _safe_prefix(self.custom_name)
+        stamp = common_utils.mmdd()
+        version = 1
         while True:
-            folder_name = f"{prefix}summary_{mmdd}_v{v_num}"
-            master_folder = self.output_dir / folder_name
-            if not master_folder.exists():
-                master_folder.mkdir(parents=True)
-                excel_name = f"{prefix}result_summary_{mmdd}_v{v_num}.xlsx"
-                return master_folder, master_folder / excel_name
-            v_num += 1
+            folder = self.output_dir / f"{prefix}summary_{stamp}_v{version}"
+            if not folder.exists():
+                folder.mkdir(parents=True)
+                name = f"{prefix}result_summary_{stamp}_v{version}.xlsx"
+                return folder, folder / name
+            version += 1
+
+    # Triplicate runs of one analysis differ only by seed, so the run with the
+    # lowest AIC-c is the one reported; the others stay in the AIC columns.
+    def _best_runs(self, errors):
+        groups = {}
+        for path in self.json_files:
+            base, run_id = run_id_from_name(Path(path).name)
+            groups.setdefault(base, {})[run_id] = path
+
+        chosen = []
+        for runs in groups.values():
+            scores, best, lowest = {}, None, float("inf")
+            for run_id, path in sorted(runs.items()):
+                try:
+                    with open(path, "r", encoding="utf-8") as fh:
+                        score = _aic(json.load(fh))
+                except (OSError, ValueError) as e:
+                    errors.append(
+                        {
+                            "file": path,
+                            "error": str(e),
+                            "type": type(e).__name__,
+                            "traceback": traceback.format_exc(),
+                        }
+                    )
+                    continue
+                if score is None:
+                    continue
+                scores[f"AIC_Run{run_id}"] = score
+                if score < lowest:
+                    lowest, best = score, run_id
+            # FUBAR writes no "fits" section, so its AIC-c is never a number.
+            # Falling back to the first run keeps those results in the report.
+            if best is None and runs:
+                best = min(runs)
+            if best is not None:
+                chosen.append((runs[best], best, scores))
+        return chosen
 
     def run(self):
         errors = []
         try:
             self.output_dir.mkdir(parents=True, exist_ok=True)
-            master_folder, save_path = self._create_master_folder_and_excel_path()
+            folder, save_path = self._report_paths()
 
-            results_by_model = {
+            rows_by_model = {
                 "BUSTED": [],
                 "aBSREL": [],
                 "RELAX": [],
-                "Site_Models": [],
+                SHEET_SITES: [],
             }
             master_data = []
+            processed = []
 
-            grouped_runs = {}
-            for f in self.json_files:
-                fname = Path(f).name
-                match = re.search(r"(.*)_run(\d+)\.JSON$", fname, re.IGNORECASE)
-                if match:
-                    base_key = match.group(1)
-                    run_id = int(match.group(2))
-                else:
-                    base_key = fname.replace(".JSON", "").replace(".json", "")
-                    run_id = 1
-
-                if base_key not in grouped_runs:
-                    grouped_runs[base_key] = {
-                        "files": {},
-                        "aics": {},
-                        "best_run": None,
-                        "best_file": None,
-                    }
-
-                grouped_runs[base_key]["files"][run_id] = f
-
-            for base_key, group in grouped_runs.items():
-                min_aic = float("inf")
-                best_run = None
-                for run_id, f_path in group["files"].items():
-                    try:
-                        with open(f_path, "r", encoding="utf-8") as f:
-                            data = json.load(f)
-                        fits = data.get("fits", {})
-
-                        aic = float("inf")
-                        if "Unconstrained model" in fits:
-                            aic = fits["Unconstrained model"].get("AIC-c", float("inf"))
-                        elif "RELAX alternative" in fits:
-                            aic = fits["RELAX alternative"].get("AIC-c", float("inf"))
-                        else:
-                            for k, v in fits.items():
-                                if isinstance(v, dict) and "AIC-c" in v:
-                                    aic = v["AIC-c"]
-                                    break
-
-                        group["aics"][f"AIC_Run{run_id}"] = aic
-                        if aic < min_aic:
-                            min_aic = aic
-                            best_run = run_id
-                            group["best_file"] = f_path
-                    except Exception:
-                        pass
-                group["best_run"] = best_run
-
-            best_files_to_process = [
-                g["best_file"] for g in grouped_runs.values() if g["best_file"]
-            ]
-            total_files = len(best_files_to_process)
-
-            for idx, file_path in enumerate(best_files_to_process):
+            chosen = self._best_runs(errors)
+            for index, (path, best_run, scores) in enumerate(chosen):
+                name = Path(path).name
                 self.progress_update.emit(
-                    int((idx / total_files) * 100), f"Parsing {Path(file_path).name}..."
+                    int((index / max(1, len(chosen))) * 100), f"Reading {name}..."
                 )
-
                 try:
-                    with open(file_path, "r", encoding="utf-8") as f:
-                        data = json.load(f)
+                    with open(path, "r", encoding="utf-8") as fh:
+                        data = json.load(fh)
 
-                    model_info = data.get("analysis", {}).get("info", "")
-                    base_name = Path(file_path).name
-                    organism_name, gene_name, fg_tag = _identity_from_json_name(
-                        base_name
-                    )
-
-                    detected_model = "Unknown"
-                    known_models = [
-                        "BUSTED",
-                        "aBSREL",
-                        "RELAX",
-                        "FEL",
-                        "MEME",
-                        "FUBAR",
-                        "SLAC",
-                    ]
-                    for m in known_models:
-                        if (
-                            m.upper() in base_name.upper()
-                            or m.upper() in model_info.upper()
-                        ):
-                            detected_model = m if m != "aBSREL" else "aBSREL"
-                            break
-
-                    if detected_model == "Unknown":
+                    if not any(k in data for k in ("fits", "MLE", "test results")):
                         raise ValueError(
-                            "Could not detect any known HyPhy model from file."
+                            "This file holds no HyPhy result; the analysis may "
+                            "not have finished."
                         )
 
-                    group_data = None
-                    for k, g in grouped_runs.items():
-                        if g["best_file"] == file_path:
-                            group_data = g
-                            break
+                    model = model_from_json_name(name) or model_from_analysis_info(data)
+                    if not model:
+                        raise ValueError(
+                            "Could not tell which HyPhy analysis wrote this file."
+                        )
 
-                    pval_master = data.get("test results", {}).get(
-                        "p-value", data.get("test results", {}).get("P-value", "")
-                    )
-                    sig_master = (
-                        "Significant"
-                        if isinstance(pval_master, (int, float)) and pval_master < 0.05
-                        else "Not Significant"
-                    )
-
-                    master_row = {
-                        "Model": detected_model,
-                        "File Name": base_name,
-                        "Organism": organism_name,
-                        "Gene Name": gene_name,
-                        "FG Tag": fg_tag,
-                        "AIC_Run1": (
-                            group_data["aics"].get("AIC_Run1", "") if group_data else ""
-                        ),
-                        "AIC_Run2": (
-                            group_data["aics"].get("AIC_Run2", "") if group_data else ""
-                        ),
-                        "AIC_Run3": (
-                            group_data["aics"].get("AIC_Run3", "") if group_data else ""
-                        ),
-                        "Best_Run": (
-                            f"Run{group_data['best_run']}"
-                            if group_data and group_data["best_run"]
-                            else "Run1"
-                        ),
-                        "p-value": pval_master,
-                        "Significance": sig_master,
-                    }
-                    master_data.append(master_row)
-
-                    common_data = {
-                        "File Name": base_name,
-                        "Organism": organism_name,
-                        "Gene Name": gene_name,
-                        "FG Tag": fg_tag,
-                        "Sequences": data.get("input", {}).get(
+                    organism, gene, tag = identity_from_json_name(name)
+                    common = {
+                        "File Name": name,
+                        "Organism": organism,
+                        "Gene Name": gene,
+                        "FG Tag": tag,
+                        "Sequences": (data.get("input", {}) or {}).get(
                             "number of sequences", ""
                         ),
-                        "Sites": data.get("input", {}).get("number of sites", ""),
+                        "Sites": (data.get("input", {}) or {}).get(
+                            "number of sites", ""
+                        ),
                     }
 
-                    if detected_model == "BUSTED":
-                        fits = data.get("fits", {})
-                        for m_name in ["Unconstrained model", "Constrained model"]:
-                            m_data = fits.get(m_name, {})
-                            if not m_data:
-                                for sub in ["Tested", "Background", "Synonymous"]:
-                                    row = common_data.copy()
-                                    row.update(
-                                        {
-                                            "Model": "BUSTED",
-                                            "Sub_Model": m_name,
-                                            "Distribution": sub,
-                                        }
-                                    )
-                                    results_by_model["BUSTED"].append(row)
-                                continue
+                    rows, pval, verdict = parse_result(data, common, model)
+                    sheet = SHEET_SITES if model in SITE_MODELS else model
+                    rows_by_model[sheet].extend(rows)
 
-                            logl = m_data.get("Log Likelihood", "")
-                            aic = m_data.get("AIC-c", "")
-                            params = m_data.get("estimated parameters", "")
-                            dists = m_data.get("Rate Distributions", {})
-
-                            dist_map = {
-                                "Tested": dists.get("Test", {}),
-                                "Background": dists.get("Background", {}),
-                                "Synonymous": dists.get(
-                                    "Synonymous", dists.get("Synonymous rates", {})
-                                ),
-                            }
-
-                            for sub, d_val in dist_map.items():
-                                row = common_data.copy()
-                                row.update(
-                                    {
-                                        "Model": "BUSTED",
-                                        "Sub_Model": m_name,
-                                        "Distribution": sub,
-                                        "Log(L)": logl,
-                                        "AIC-c": aic,
-                                        "Params": params,
-                                        "p-value": pval_master,
-                                        "Significance": sig_master,
-                                        "Omega_3": (
-                                            self._extract_omega_3(d_val)
-                                            if d_val
-                                            else ""
-                                        ),
-                                    }
-                                )
-                                results_by_model["BUSTED"].append(row)
-
-                    elif detected_model == "RELAX":
-                        fits = data.get("fits", {})
-                        tr = data.get("test results", {})
-                        k_val = tr.get("relaxation or intensification parameter", "")
-                        sel_pat = (
-                            "Intensification"
-                            if isinstance(k_val, (int, float)) and k_val > 1
-                            else "Relaxation" if isinstance(k_val, (int, float)) else ""
-                        )
-
-                        for m_name in ["RELAX null", "RELAX alternative"]:
-                            m_data = fits.get(m_name, {})
-                            if not m_data:
-                                for sub in ["Reference", "Test"]:
-                                    row = common_data.copy()
-                                    row.update(
-                                        {
-                                            "Model": "RELAX",
-                                            "Sub_Model": m_name,
-                                            "Branch": sub,
-                                            "K_Value": k_val,
-                                            "Selection": sel_pat,
-                                        }
-                                    )
-                                    results_by_model["RELAX"].append(row)
-                                continue
-
-                            logl = m_data.get("Log Likelihood", "")
-                            aic = m_data.get("AIC-c", "")
-                            params = m_data.get("estimated parameters", "")
-                            dists = m_data.get("Rate Distributions", {})
-
-                            for sub in ["Reference", "Test"]:
-                                row = common_data.copy()
-                                row.update(
-                                    {
-                                        "Model": "RELAX",
-                                        "Sub_Model": m_name,
-                                        "Branch": sub,
-                                        "Log(L)": logl,
-                                        "AIC-c": aic,
-                                        "Params": params,
-                                        "p-value": pval_master,
-                                        "Significance": sig_master,
-                                        "K_Value": k_val,
-                                        "Selection": sel_pat,
-                                        "Omega_3": self._extract_omega_3(
-                                            dists.get(sub, {})
-                                        ),
-                                    }
-                                )
-                                results_by_model["RELAX"].append(row)
-
-                    elif detected_model == "aBSREL":
-                        row = common_data.copy()
-                        row["Model"] = "aBSREL"
-                        row["Tested Lineages"] = data.get("test results", {}).get(
-                            "tested", 0
-                        )
-                        pos_lineages = data.get("test results", {}).get(
-                            "positive test results", 0
-                        )
-                        row["Positive Lineages"] = pos_lineages
-                        row["Significance"] = (
-                            "Significant" if pos_lineages > 0 else "Not Significant"
-                        )
-
-                        sig_branches = []
-                        branch_attrs = data.get("branch attributes", {})
-                        branches = {}
-                        if branch_attrs:
-                            first_key = list(branch_attrs.keys())[0]
-                            branches = branch_attrs.get(first_key, {})
-
-                        for node, attr in branches.items():
-                            if attr.get("Corrected P-value", 1) < 0.05:
-                                sig_branches.append(node)
-                        row["Significant Branches"] = ", ".join(sig_branches)
-                        row["p-value"] = pval_master
-                        results_by_model["aBSREL"].append(row)
-
-                    elif detected_model in ["FEL", "MEME", "FUBAR", "SLAC"]:
-                        row = common_data.copy()
-                        row["Model"] = detected_model
-                        headers = data.get("MLE", {}).get("headers", [])
-                        content_dict = data.get("MLE", {}).get("content", {})
-                        content = []
-                        if content_dict:
-                            first_key = list(content_dict.keys())[0]
-                            content = content_dict.get(first_key, [])
-
-                        pval_idx = -1
-                        for i, h in enumerate(headers):
-                            if "p-value" in h[0].lower() or "posterior" in h[0].lower():
-                                pval_idx = i
-                                break
-
-                        sig_sites = []
-                        if pval_idx != -1:
-                            for i, c_row in enumerate(content):
-                                val = c_row[pval_idx]
-                                if (
-                                    "posterior" in headers[pval_idx][0].lower()
-                                    and val >= 0.9
-                                ) or (
-                                    "p-value" in headers[pval_idx][0].lower()
-                                    and val < 0.05
-                                ):
-                                    sig_sites.append(str(i + 1))
-
-                        row["Tested Sites"] = len(content)
-                        row["Significant Sites Count"] = len(sig_sites)
-                        row["Significance"] = (
-                            "Significant" if len(sig_sites) > 0 else "Not Significant"
-                        )
-                        row["Significant Sites List"] = ", ".join(sig_sites)
-                        row["p-value"] = pval_master
-                        results_by_model["Site_Models"].append(row)
+                    master_row = {
+                        "Model": model,
+                        "File Name": name,
+                        "Organism": organism,
+                        "Gene Name": gene,
+                        "FG Tag": tag,
+                        "AIC_Run1": scores.get("AIC_Run1", ""),
+                        "AIC_Run2": scores.get("AIC_Run2", ""),
+                        "AIC_Run3": scores.get("AIC_Run3", ""),
+                        "Best_Run": f"Run{best_run}",
+                        "p-value": pval,
+                        "Significance": verdict,
+                    }
+                    master_data.append(master_row)
+                    processed.append(path)
 
                 except Exception as e:
                     errors.append(
                         {
-                            "file": file_path,
+                            "file": path,
                             "error": str(e),
                             "type": type(e).__name__,
                             "traceback": traceback.format_exc(),
@@ -435,504 +536,45 @@ class SummaryExportThread(QThread):
                     )
 
             if not master_data:
-                self.finished.emit(
+                self.export_done.emit(
                     {
                         "status": "error",
-                        "message": "No valid data to export.",
+                        "message": "No result file could be read.",
                         "type": "NoValidData",
-                        "traceback": "All parsed rows were empty.",
+                        "traceback": "",
                         "errors": errors,
+                        "processed": [],
                     }
                 )
                 return
 
-            self.progress_update.emit(90, "Writing Excel file...")
-
+            self.progress_update.emit(90, "Writing the report...")
             try:
-                df_master = pd.DataFrame(master_data).sort_values(by="Model")
-
-                with pd.ExcelWriter(save_path, engine="xlsxwriter") as writer:
-                    workbook = writer.book
-                    fmt_header = workbook.add_format(
-                        {"bold": True, "bg_color": "#FAFAFA", "border": 1}
-                    )
-                    fmt_sig = workbook.add_format(
-                        {"bg_color": "#FFFF99", "font_color": "#FF0000"}
-                    )
-                    fmt_best_aic = workbook.add_format({"bg_color": "#E5FFE5"})
-                    fmt_thick_bottom = workbook.add_format({"bottom": 2})
-                    fmt_thin_bottom = workbook.add_format({"bottom": 1})
-
-                    df_master.to_excel(
-                        writer, sheet_name="p-value summary", index=False
-                    )
-                    ws_master = writer.sheets["p-value summary"]
-                    for col_num, value in enumerate(df_master.columns.values):
-                        ws_master.write(0, col_num, value, fmt_header)
-                        ws_master.set_column(col_num, col_num, 15)
-
-                    for row_idx, row in df_master.iterrows():
-                        xls_row = row_idx + 1
-                        pval = row.get("p-value", "")
-                        is_sig = isinstance(pval, (int, float)) and pval < 0.05
-
-                        if is_sig:
-                            ws_master.write(
-                                xls_row,
-                                df_master.columns.get_loc("p-value"),
-                                pval,
-                                fmt_sig,
-                            )
-                            ws_master.write(
-                                xls_row,
-                                df_master.columns.get_loc("Significance"),
-                                row.get("Significance", ""),
-                                fmt_sig,
-                            )
-
-                        aic_cols = [
-                            c for c in df_master.columns if c.startswith("AIC_Run")
-                        ]
-                        aic_vals = [
-                            row[c] for c in aic_cols if isinstance(row[c], (int, float))
-                        ]
-                        if aic_vals:
-                            min_aic = min(aic_vals)
-                            for c in aic_cols:
-                                if row[c] == min_aic:
-                                    ws_master.write(
-                                        xls_row,
-                                        df_master.columns.get_loc(c),
-                                        row[c],
-                                        fmt_best_aic,
-                                    )
-
-                        if row_idx < len(df_master) - 1:
-                            if (
-                                df_master.iloc[row_idx]["Model"]
-                                != df_master.iloc[row_idx + 1]["Model"]
-                            ):
-                                ws_master.set_row(xls_row, None, fmt_thick_bottom)
-
-                    for sheet_name, rows in results_by_model.items():
-                        if not rows:
-                            continue
-
-                        df = pd.DataFrame(rows)
-                        df.to_excel(writer, sheet_name=sheet_name, index=False)
-                        worksheet = writer.sheets[sheet_name]
-
-                        for col_num, col_name in enumerate(df.columns):
-                            worksheet.write(0, col_num, col_name, fmt_header)
-                            worksheet.set_column(
-                                col_num, col_num, max(len(col_name) + 5, 15)
-                            )
-
-                        prev_file = ""
-                        prev_sub = ""
-                        for row_idx, row in df.iterrows():
-                            xls_row = row_idx + 1
-                            pval = row.get("p-value", "")
-                            if isinstance(pval, (int, float)) and pval < 0.05:
-                                if "p-value" in df.columns:
-                                    worksheet.write(
-                                        xls_row,
-                                        df.columns.get_loc("p-value"),
-                                        pval,
-                                        fmt_sig,
-                                    )
-                                if "Significance" in df.columns:
-                                    worksheet.write(
-                                        xls_row,
-                                        df.columns.get_loc("Significance"),
-                                        row.get("Significance", ""),
-                                        fmt_sig,
-                                    )
-
-                            curr_file = row.get("File Name", "")
-                            curr_sub = row.get("Sub_Model", "")
-
-                            if row_idx > 0:
-                                if curr_file != prev_file:
-                                    worksheet.set_row(
-                                        xls_row - 1, None, fmt_thick_bottom
-                                    )
-                                elif curr_sub != prev_sub:
-                                    worksheet.set_row(
-                                        xls_row - 1, None, fmt_thin_bottom
-                                    )
-                            prev_file = curr_file
-                            prev_sub = curr_sub
-
-            except PermissionError:
+                write_report(save_path, master_data, rows_by_model)
+            except PermissionError as e:
                 raise PermissionError(
-                    "The Excel file is currently open. Please close it and try again."
-                )
+                    "The report is open in another program. Close it and try again."
+                ) from e
 
-            self.progress_update.emit(100, "Done!")
-            self.finished.emit(
-                {"status": "success", "path": str(save_path), "errors": errors}
+            self.progress_update.emit(100, "Done.")
+            self.export_done.emit(
+                {
+                    "status": "success",
+                    "path": str(save_path),
+                    "folder": str(folder),
+                    "errors": errors,
+                    "processed": processed,
+                }
             )
 
         except Exception as e:
-            self.finished.emit(
+            self.export_done.emit(
                 {
                     "status": "error",
                     "message": str(e),
                     "type": type(e).__name__,
                     "traceback": traceback.format_exc(),
                     "errors": errors,
+                    "processed": [],
                 }
             )
-
-
-class VisualizationWorker(QThread):
-    progress_update = pyqtSignal(int, str)
-    finished_viz = pyqtSignal(str)
-    error_viz = pyqtSignal(str)
-
-    def __init__(self, excel_files, output_dir, custom_name=""):
-        super().__init__()
-        self.excel_files = excel_files
-        self.custom_name = custom_name
-        self.output_dir = Path(self.excel_files[0]).parent
-        self.palette = [
-            "#B19CD9",
-            "#FFB7B2",
-            "#AEC6CF",
-            "#FFD1DC",
-            "#CFCFC4",
-            "#FDFD96",
-            "#836953",
-            "#77DD77",
-            "#F49AC2",
-            "#CB99C9",
-            "#C23B22",
-            "#FFD12A",
-        ]
-
-    def _generate_plot_path(self, model, plot_type, tag=""):
-        clean_custom = re.sub(r'[\\/*?:"<>|]', "", self.custom_name.strip())
-        prefix = f"HYphlow_{clean_custom}_" if clean_custom else "HYphlow_"
-        mmdd = datetime.datetime.now().strftime("%m%d")
-        v_num = 1
-
-        tag_str = f"_{tag}" if tag else ""
-
-        while True:
-            fname = f"{prefix}{model}_{plot_type}{tag_str}_{mmdd}_v{v_num}.svg"
-            full_path = self.output_dir / fname
-            if not full_path.exists():
-                return full_path
-            v_num += 1
-
-    def run(self):
-        try:
-            self.progress_update.emit(10, "Loading Excel Data...")
-            dfs = []
-            for f in self.excel_files:
-                try:
-                    df = pd.read_excel(f, sheet_name="p-value summary")
-                    busted_df = (
-                        pd.read_excel(f, sheet_name="BUSTED")
-                        if "BUSTED" in pd.ExcelFile(f).sheet_names
-                        else pd.DataFrame()
-                    )
-                    relax_df = (
-                        pd.read_excel(f, sheet_name="RELAX")
-                        if "RELAX" in pd.ExcelFile(f).sheet_names
-                        else pd.DataFrame()
-                    )
-                    dfs.append((df, busted_df, relax_df))
-                except Exception:
-                    pass
-
-            if not dfs:
-                raise ValueError("No valid sheets found.")
-
-            self.progress_update.emit(30, "Processing Model Data...")
-
-            for df_master, df_busted, df_relax in dfs:
-                busted_master = df_master[df_master["Model"] == "BUSTED"]
-                relax_master = df_master[df_master["Model"] == "RELAX"]
-
-                if not busted_master.empty and not df_busted.empty:
-                    self._plot_busted(busted_master, df_busted)
-
-                if not relax_master.empty and not df_relax.empty:
-                    self._plot_relax(relax_master, df_relax)
-
-            self.progress_update.emit(90, "Saving Source Data Excel...")
-            clean_custom = re.sub(r'[\\/*?:"<>|]', "", self.custom_name.strip())
-            prefix = f"HYphlow_{clean_custom}_" if clean_custom else "HYphlow_"
-            mmdd = datetime.datetime.now().strftime("%m%d")
-
-            src_path = self.output_dir / f"{prefix}plot_SourceData_{mmdd}.xlsx"
-
-            with pd.ExcelWriter(src_path, engine="xlsxwriter") as writer:
-                for df_master, df_busted, df_relax in dfs:
-                    if not df_busted.empty:
-                        df_busted.to_excel(
-                            writer, sheet_name="BUSTED_Source", index=False
-                        )
-                    if not df_relax.empty:
-                        df_relax.to_excel(
-                            writer, sheet_name="RELAX_Source", index=False
-                        )
-
-            self.finished_viz.emit(str(self.output_dir))
-
-        except Exception as e:
-            self.error_viz.emit(str(e))
-
-    def _plot_busted(self, master_df, sheet_df):
-        plot_data = []
-        fg_tags = set()
-
-        for _, row in master_df.iterrows():
-            gname = row["Gene Name"]
-            fg_tag = row.get("FG Tag", "Entire Branch")
-            p_val = row["p-value"]
-
-            best_rows = sheet_df[
-                (sheet_df["Gene Name"] == gname)
-                & (sheet_df["Sub_Model"] == "Unconstrained model")
-            ]
-            bg_val = None
-            fg_val = None
-
-            for _, b_row in best_rows.iterrows():
-                dist = b_row.get("Distribution", "")
-                om_str = str(b_row.get("Omega_3", ""))
-                if om_str and "(" in om_str:
-                    val = float(om_str.split("(")[0].strip())
-                    if dist == "Background":
-                        bg_val = val
-                    elif dist == "Tested":
-                        fg_val = val
-
-            if fg_val is not None and bg_val is not None:
-                plot_data.append(
-                    {
-                        "Gene Name": gname,
-                        "FG Tag": fg_tag,
-                        "FG_Omega": fg_val,
-                        "BG_Omega": bg_val,
-                        "p-value": pd.to_numeric(p_val, errors="coerce"),
-                    }
-                )
-                fg_tags.add(fg_tag)
-
-        if not plot_data:
-            return
-
-        plot_df = pd.DataFrame(plot_data).sort_values(by=["FG Tag", "Gene Name"])
-        color_map = {
-            tag: self.palette[i % len(self.palette)]
-            for i, tag in enumerate(sorted(list(fg_tags)))
-        }
-
-        sig_df = plot_df[plot_df["p-value"] < 0.05]
-        if not sig_df.empty:
-            self._draw_dumbbell(
-                sig_df, color_map, "BUSTED", "FG_Omega", "BG_Omega", "ω (dN/dS)"
-            )
-
-        self._draw_factor_bars(plot_df, color_map, "BUSTED", "FG_Omega", "FG ω (dN/dS)")
-
-    def _plot_relax(self, master_df, sheet_df):
-        plot_data = []
-        fg_tags = set()
-
-        for _, row in master_df.iterrows():
-            gname = row["Gene Name"]
-            fg_tag = row.get("FG Tag", "Entire Branch")
-            p_val = row["p-value"]
-
-            best_rows = sheet_df[
-                (sheet_df["Gene Name"] == gname)
-                & (sheet_df["Sub_Model"] == "RELAX alternative")
-            ]
-
-            k_val = None
-            for _, b_row in best_rows.iterrows():
-                k_val_raw = b_row.get("K_Value", "")
-                if isinstance(k_val_raw, (int, float)):
-                    k_val = k_val_raw
-                    break
-
-            if k_val is not None:
-                plot_data.append(
-                    {
-                        "Gene Name": gname,
-                        "FG Tag": fg_tag,
-                        "K_Value": k_val,
-                        "Baseline": 1.0,
-                        "p-value": pd.to_numeric(p_val, errors="coerce"),
-                    }
-                )
-                fg_tags.add(fg_tag)
-
-        if not plot_data:
-            return
-
-        plot_df = pd.DataFrame(plot_data).sort_values(by=["FG Tag", "Gene Name"])
-        color_map = {
-            tag: self.palette[i % len(self.palette)]
-            for i, tag in enumerate(sorted(list(fg_tags)))
-        }
-
-        sig_df = plot_df[plot_df["p-value"] < 0.05]
-        if not sig_df.empty:
-            self._draw_dumbbell(
-                sig_df,
-                color_map,
-                "RELAX",
-                "K_Value",
-                "Baseline",
-                "K (Relaxation Parameter)",
-            )
-
-        self._draw_factor_bars(plot_df, color_map, "RELAX", "K_Value", "K Value")
-
-    def _draw_dumbbell(self, df, color_map, model_name, fg_col, bg_col, x_label):
-        sns.set_style("ticks")
-        min_height = 6.0
-        calc_height = len(df) * 0.4
-        final_height = max(min_height, calc_height)
-
-        plt.figure(figsize=(10, final_height))
-        plt.xscale("log")
-
-        y_ticks = []
-        y_labels = []
-        current_y = 0
-
-        tag_groups = df.groupby("FG Tag", sort=False)
-
-        for tag, group in tag_groups:
-            start_y = current_y
-            c = color_map[tag]
-            for _, row in group.iterrows():
-                plt.hlines(
-                    y=current_y,
-                    xmin=row[bg_col],
-                    xmax=row[fg_col],
-                    color="gray",
-                    alpha=0.4,
-                    linewidth=2,
-                )
-                plt.scatter(
-                    row[bg_col],
-                    current_y,
-                    facecolors="none",
-                    edgecolors=c,
-                    s=100,
-                    linewidth=2,
-                    zorder=3,
-                )
-                plt.scatter(row[fg_col], current_y, color=c, s=100, zorder=3)
-
-                y_ticks.append(current_y)
-                y_labels.append(row["Gene Name"])
-                current_y += 1
-
-            end_y = current_y - 1
-            plt.axhspan(start_y - 0.5, end_y + 0.5, facecolor=c, alpha=0.15, zorder=0)
-
-        plt.axvline(x=1, color="red", linestyle="--", alpha=0.7, zorder=1)
-
-        plt.yticks(y_ticks, y_labels, fontsize=11)
-        plt.xlabel(x_label, fontsize=14)
-        plt.ylabel("Gene names", fontsize=14)
-
-        import matplotlib.lines as mlines
-
-        legend_handles = [
-            mlines.Line2D(
-                [],
-                [],
-                color="black",
-                marker="o",
-                linestyle="None",
-                markerfacecolor="none",
-                markersize=10,
-                label="Background / Reference",
-            ),
-            mlines.Line2D(
-                [],
-                [],
-                color="black",
-                marker="o",
-                linestyle="None",
-                markersize=10,
-                label="Foreground / Test",
-            ),
-        ]
-        for tag, c in color_map.items():
-            legend_handles.append(
-                mlines.Line2D(
-                    [],
-                    [],
-                    color=c,
-                    marker="s",
-                    linestyle="None",
-                    markersize=10,
-                    label=tag,
-                )
-            )
-
-        plt.legend(
-            handles=legend_handles,
-            title="Foreground",
-            bbox_to_anchor=(1.05, 1),
-            loc="upper left",
-            frameon=False,
-        )
-        sns.despine()
-
-        fig1_path = self._generate_plot_path(model_name, "plot_best_fit")
-        plt.savefig(fig1_path, format="svg", bbox_inches="tight")
-        plt.close()
-
-    def _draw_factor_bars(self, df, color_map, model_name, val_col, x_label):
-        sns.set_style("ticks")
-        tag_groups = df.groupby("FG Tag", sort=False)
-
-        for tag, group in tag_groups:
-            plt.figure(figsize=(8, max(4.0, len(group) * 0.5)))
-
-            group_sorted = group.sort_values(by=val_col, ascending=True)
-            y_positions = range(len(group_sorted))
-            c = color_map[tag]
-
-            plt.barh(
-                y_positions,
-                group_sorted[val_col],
-                color=c,
-                alpha=0.8,
-                height=0.5,
-            )
-
-            for y_pos, (_, row) in zip(y_positions, group_sorted.iterrows()):
-                if row["p-value"] < 0.05:
-                    plt.text(
-                        row[val_col],
-                        y_pos,
-                        " *",
-                        verticalalignment="center",
-                        fontsize=18,
-                        color="black",
-                    )
-
-            plt.yticks(y_positions, group_sorted["Gene Name"], fontsize=11)
-            plt.xlabel(x_label, fontsize=14)
-            plt.title(f"Foreground: {tag}", fontsize=14, fontweight="bold")
-            sns.despine()
-
-            clean_tag = "".join(x for x in tag if x.isalnum() or x in "_")
-            fig2_path = self._generate_plot_path(
-                model_name, "plot_across_gene", clean_tag
-            )
-            plt.savefig(fig2_path, format="svg", bbox_inches="tight")
-            plt.close()
