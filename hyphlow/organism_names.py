@@ -26,12 +26,21 @@ def load(path):
         }
 
 
+# An install that lost data/organism_names_*.txt.gz still runs, but every
+# species name then reads as a possible gene symbol. Say so once.
 def get_names(data_dir=None):
-
     global _names
     if _names is None:
         found = find_list(data_dir)
-        _names = load(found) if found else set()
+        if found is None:
+            print(
+                f"[HYphlow] No organism name list under {_data_dir()}. "
+                "Species names will not be recognised.",
+                file=sys.stderr,
+            )
+            _names = set()
+        else:
+            _names = load(found)
     return _names
 
 
