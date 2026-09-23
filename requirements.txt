@@ -1,10 +1,7 @@
+PyQt5
+qtawesome
 pandas
-biopython
 ete3
 rapidfuzz
 taxopy
 xlsxwriter
-PyQt5
-qtawesome
-matplotlib
-seaborn
