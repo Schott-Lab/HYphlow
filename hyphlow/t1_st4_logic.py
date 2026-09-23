@@ -1,114 +1,69 @@
 import concurrent.futures
 from pathlib import Path
-from ete3 import Tree
-import pandas as pd
-import datetime
 
-from hyphlow import common_utils
-from hyphlow import t1_st1_logic
-from hyphlow import manifest_logic_tab
 
+from hyphlow import (
+    bio_io,
+    common_utils,
+    manifest_logic_tab,
+    t1_st1_logic,
+    report_builder,
+)
+
+# ============================================================ constants
+RETAINED = "RETAINED"
+PRUNED = "PRUNED"
+
+# Not ERROR. t1_st1_logic.ERROR means the run failed; this means the master
+# tree does not cover the taxon, which is a normal outcome.
+MISSING_IN_TREE = "MISSING_IN_TREE"
+
+COLOR_BY_STATUS = {
+    RETAINED: "green",
+    PRUNED: "orange",
+    MISSING_IN_TREE: "red",
+}
+
+MIN_TAXA = 3
 
 
 def get_results_path():
     return common_utils.get_pipeline_path(
-        t1_st1_logic.CURRENT_PROJECT_PATH, "Results", "NWK"
+        t1_st1_logic.CURRENT_PROJECT_PATH, common_utils.RESULTS, "NWK"
     )
 
 
 def get_reports_path():
     return common_utils.get_pipeline_path(
-        t1_st1_logic.CURRENT_PROJECT_PATH, "Reports", "NWK"
+        t1_st1_logic.CURRENT_PROJECT_PATH, common_utils.REPORTS, "NWK"
     )
 
 
-def _get_fasta_taxa(f_path):
-    taxa = set()
-    try:
-        with open(f_path, "r", encoding="utf-8") as f:
-            for line in f:
-                if line.startswith(">"):
-                    taxa.add(line.strip().lstrip(">").replace(" ", "_"))
-    except Exception as e:
-        raise RuntimeError(f"Failed to read FASTA file: {e}")
-    return taxa
-
-
 def generate_pruning_report(res_dict, rep_path):
+    retained = res_dict.get("retained_count", 0)
+    pruned = res_dict.get("pruned_count", 0)
+    missing = res_dict.get("missing_count", 0)
     try:
-        with pd.ExcelWriter(rep_path, engine="xlsxwriter") as writer:
-            workbook = writer.book
-            bold_fmt = workbook.add_format({"bold": True})
-            green_bg = workbook.add_format(
-                {"bg_color": "#EBF9EE", "font_color": "#16A34A", "bold": True}
-            )
-            red_bg = workbook.add_format(
-                {"bg_color": "#FFECEB", "font_color": "#FF3B30", "bold": True}
-            )
-            orange_bg = workbook.add_format(
-                {"bg_color": "#FFF9E5", "font_color": "#FF9500", "bold": True}
-            )
-
-            ws_sum = workbook.add_worksheet("Summary")
-            ws_sum.set_column("A:B", 30)
-
-            ws_sum.write("A1", "HYphlow Tree Pruning Report", bold_fmt)
-            ws_sum.write("A2", "Date & Time", bold_fmt)
-            ws_sum.write("B2", datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-            ws_sum.write("A3", "Source FASTA", bold_fmt)
-            ws_sum.write("B3", res_dict.get("fasta_name", "Unknown"))
-            ws_sum.write("A4", "Pruned Tree Output", bold_fmt)
-            ws_sum.write("B4", res_dict.get("out_name", "Unknown"))
-
-            ws_sum.write("A6", "--- Statistics ---", bold_fmt)
-            ws_sum.write("A7", "Perfectly Retained", bold_fmt)
-            ws_sum.write("B7", res_dict.get("perfect_count", 0), green_bg)
-            ws_sum.write("A8", "Pruned (Not in FASTA)", bold_fmt)
-            ws_sum.write("B8", res_dict.get("pruned_count", 0), orange_bg)
-            ws_sum.write("A9", "Missing (Not in Tree)", bold_fmt)
-
-            missing_count = res_dict.get("missing_count", 0)
-            ws_sum.write("B9", missing_count, red_bg if missing_count > 0 else None)
-
-            details_data = res_dict.get("details_data", [])
-            if details_data:
-                df = pd.DataFrame(details_data, columns=["Taxon", "Action", "Status"])
-                df.to_excel(writer, sheet_name="Detailed Report", index=False)
-
-                ws_det = writer.sheets["Detailed Report"]
-                ws_det.set_column("A:C", 30)
-
-                row_range = f"C2:C{len(details_data)+1}"
-                ws_det.conditional_format(
-                    row_range,
-                    {
-                        "type": "cell",
-                        "criteria": "==",
-                        "value": '"PERFECT"',
-                        "format": green_bg,
-                    },
-                )
-                ws_det.conditional_format(
-                    row_range,
-                    {
-                        "type": "cell",
-                        "criteria": "==",
-                        "value": '"PRUNED"',
-                        "format": orange_bg,
-                    },
-                )
-                ws_det.conditional_format(
-                    row_range,
-                    {
-                        "type": "cell",
-                        "criteria": "==",
-                        "value": '"ERROR"',
-                        "format": red_bg,
-                    },
-                )
-
+        report_builder.build_report(
+            rep_path,
+            title="Tree Pruning",
+            source=res_dict.get("fasta_name", "Unknown"),
+            output=res_dict.get("out_name", "Unknown"),
+            stats=[
+                ("Retained Taxa", retained, "green" if retained else None),
+                ("Pruned (Not in FASTA)", pruned, "orange" if pruned else None),
+                ("Missing (Not in Tree)", missing, "red" if missing else None),
+            ],
+            rows=res_dict.get("details_data", []),
+            columns=["Taxon", "Action", "Status"],
+            color_column="Status",
+            color_map=COLOR_BY_STATUS,
+            widths={"A:C": 30},
+        )
     except Exception as e:
-        raise RuntimeError(f"Report generation failed (Check if file is open): {e}")
+        raise RuntimeError(
+            f"Report generation failed (Check if file is open): {e}"
+        ) from e
 
 
 def process_pruning_worker(args):
@@ -127,17 +82,11 @@ def process_pruning_worker(args):
     rep_path = Path(new_rep_name_str)
 
     try:
-        try:
-            tree = Tree(str(n_path), format=1)
-            orig_format = 1
-        except Exception:
-            tree = Tree(str(n_path))
-            orig_format = 0
-
-        fasta_taxa = _get_fasta_taxa(f_path)
+        tree, orig_format = bio_io.load_tree(n_path)
+        fasta_taxa = bio_io.read_fasta_taxa(f_path)
 
         tree_taxa_map = {
-            leaf.name.replace(" ", "_"): leaf.name for leaf in tree.get_leaves()
+            common_utils.to_label(leaf.name): leaf.name for leaf in tree.get_leaves()
         }
         tree_taxa = set(tree_taxa_map.keys())
 
@@ -147,24 +96,24 @@ def process_pruning_worker(args):
 
         details_data = []
         for t in common_taxa:
-            details_data.append([t, "Retained", "PERFECT"])
+            details_data.append([t, "Retained", RETAINED])
         for t in missing_in_fasta:
-            details_data.append([t, "Pruned (Not in FASTA)", "PRUNED"])
+            details_data.append([t, "Pruned (Not in FASTA)", PRUNED])
         for t in missing_in_tree:
-            details_data.append([t, "Missing (Not in Tree)", "ERROR"])
+            details_data.append([t, "Missing (Not in Tree)", MISSING_IN_TREE])
 
-        has_mismatch = len(missing_in_tree) > 0
-        out_name_str = "Failed (No Overlap)"
-
-        if len(common_taxa) < 3:
+        if len(common_taxa) < MIN_TAXA:
             return {
                 "file": f_path.name,
                 "success": False,
-                "error": f"Insufficient overlapping taxa ({len(common_taxa)}). Minimum 3 required to form a tree.",
+                "error": (
+                    f"Insufficient overlapping taxa ({len(common_taxa)}). "
+                    f"Minimum {MIN_TAXA} required to form a tree."
+                ),
                 "rep_path": rep_path,
                 "fasta_name": f_path.name,
                 "out_name": "Failed",
-                "perfect_count": len(common_taxa),
+                "retained_count": len(common_taxa),
                 "pruned_count": len(missing_in_fasta),
                 "missing_count": len(missing_in_tree),
                 "details_data": details_data,
@@ -174,24 +123,16 @@ def process_pruning_worker(args):
         prune_targets = [tree_taxa_map[t] for t in common_taxa]
         tree.prune(prune_targets, preserve_branch_length=True)
         tree.write(outfile=str(out_path), format=orig_format)
-        out_name_str = out_path.name
-
-        warning_msg = ""
-        if missing_in_tree:
-            warning_msg = f"Target FASTA contains taxa missing in Master Tree: {', '.join(list(missing_in_tree)[:3])}"
-            if len(missing_in_tree) > 3:
-                warning_msg += "..."
 
         return {
             "file": f_path.name,
             "success": True,
-            "warning": warning_msg,
-            "has_mismatch": has_mismatch,
-            "out_name": out_name_str,
+            "has_mismatch": bool(missing_in_tree),
+            "out_name": out_path.name,
             "out_path": str(out_path),
             "src_path": str(f_path),
             "fasta_name": f_path.name,
-            "perfect_count": len(common_taxa),
+            "retained_count": len(common_taxa),
             "pruned_count": len(missing_in_fasta),
             "missing_count": len(missing_in_tree),
             "details_data": details_data,
@@ -207,7 +148,7 @@ def process_pruning_worker(args):
         }
 
 
-def run_pruning_pipeline(fasta_files, nwk_files, gene_dict, identity_dict=None):
+def run_pruning_pipeline(fasta_files, nwk_files, identity_dict=None, progress_cb=None):
     out_dir = get_results_path()
     rep_dir = get_reports_path()
     if not out_dir or not rep_dir or not nwk_files:
@@ -215,6 +156,7 @@ def run_pruning_pipeline(fasta_files, nwk_files, gene_dict, identity_dict=None):
 
     results = []
     last_rep_path = ""
+    done = 0
 
     nwk_target = nwk_files[0]
     identity_dict = identity_dict or {}
@@ -224,7 +166,8 @@ def run_pruning_pipeline(fasta_files, nwk_files, gene_dict, identity_dict=None):
     for fp in fasta_files:
         typed = identity_dict.get(fp)
         org, gene = manifest_logic_tab.resolve_identity(proj, fp, typed)
-        resolved[fp] = (org, gene)
+        # keyed by the same string the worker reports back as src_path
+        resolved[str(Path(fp))] = (org, gene)
         tasks.append(
             (fp, nwk_target, out_dir, rep_dir, common_utils.make_base_name(org, gene))
         )
@@ -243,18 +186,12 @@ def run_pruning_pipeline(fasta_files, nwk_files, gene_dict, identity_dict=None):
             if result.get("success") and result.get("out_path"):
                 src = result.get("src_path", "")
                 org, gene = resolved.get(src, ("", ""))
-                try:
-                    manifest_logic_tab.add_row(
-                        t1_st1_logic.CURRENT_PROJECT_PATH,
-                        org,
-                        gene,
-                        "",
-                        "prn",
-                        result["out_path"],
-                        src,
-                    )
-                except Exception as e:
-                    print("manifest write failed:", e)
+                manifest_logic_tab.add_row(
+                    proj, org, gene, "", "prn", result["out_path"], src
+                )
             results.append(result)
+            done += 1
+            if progress_cb:
+                progress_cb(done, len(tasks))
 
     return results, str(last_rep_path)
