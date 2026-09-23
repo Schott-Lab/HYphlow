@@ -3,12 +3,12 @@ import re
 import threading
 from pathlib import Path
 
+from hyphlow import common_utils, organism_names
+
 COLUMNS = ["organism", "gene", "tag", "stage", "path", "source"]
 _LOCK = threading.Lock()
 
 OK, WARN, ERROR = "ok", "warn", "error"
-
-from hyphlow import common_utils, organism_names
 
 
 def manifest_path(project_path):
