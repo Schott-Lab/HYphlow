@@ -1098,12 +1098,13 @@ class LogConsole(QFrame):
     def append_wsl_log(self, text):
         # Plain, not append(): HyPhy output holding a "<" would otherwise be
         # read as markup and vanish from the terminal panel.
-        self.wsl_browser.appendPlainText(text)
+        self.wsl_browser.moveCursor(QTextCursor.MoveOperation.End)
+        self.wsl_browser.insertPlainText(text + "\n")
         self.wsl_browser.moveCursor(QTextCursor.MoveOperation.End)
 
     def clear_wsl_log(self):
         self.wsl_browser.clear()
-        self.wsl_browser.append(TERMINAL_READY)
+        self.wsl_browser.insertPlainText(TERMINAL_READY + "\n")
 
     def append_log(self, text, default_type="info"):
         level = default_type.lower()
