@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hyphlow"
-version = "1.0.7"
+version = "1.0.8"
 description = "A GUI pipeline for phylogenetic selection analysis with HyPhy"
 readme = "README.md"
 license = { text = "MIT" }
