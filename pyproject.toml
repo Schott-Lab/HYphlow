@@ -43,4 +43,4 @@ packages = ["hyphlow"]
 
 # data/ holds the organism name list. Without it every species name in a file name reads as a possible gene symbol, and nothing reports that it is missing.
 [tool.setuptools.package-data]
-"hyphlow" = ["assets/*","data/*.txt.gz]
+"hyphlow" = ["assets/*","data/*.txt.gz"]
