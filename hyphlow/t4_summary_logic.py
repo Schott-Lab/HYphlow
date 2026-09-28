@@ -20,6 +20,9 @@ SITE_MODELS = ("FEL", "MEME", "FUBAR")
 P_THRESHOLD = 0.05
 # FUBAR reports a posterior probability instead of a p-value.
 POSTERIOR_THRESHOLD = 0.9
+# site-level columns read for the verdict, matched by exact name. FUBAR's is Prob[alpha<beta], which contains neither p-vlaue nor posterior
+SITE_PVALUE_COLUMN = "p-value"
+SITE_POSTERIOR_COLUMN = "Prob[alpha<beta]"
 
 SHEET_MASTER = "p-value summary"
 SHEET_SITES = "Site_Models"
@@ -244,13 +247,15 @@ def _parse_sites(data, common, model):
             content = value
             break
 
-    column = -1
-    label = ""
-    for i, header in enumerate(headers):
-        text = str(header[0]).lower() if header else ""
-        if "p-value" in text or "posterior" in text:
-            column, label = i, text
-            break
+    # Matched by exact column name. Searching for the word "posterior" found no
+    # FUBAR column, so every FUBAR result reported zero sites without an error.
+    names = [str(header[0]) if header else "" for header in headers]
+    if SITE_POSTERIOR_COLUMN in names:
+        column, is_posterior = names.index(SITE_POSTERIOR_COLUMN), True
+    elif SITE_PVALUE_COLUMN in names:
+        column, is_posterior = names.index(SITE_PVALUE_COLUMN), False
+    else:
+        column, is_posterior = -1, False
 
     named = []
     if column >= 0:
@@ -258,7 +263,7 @@ def _parse_sites(data, common, model):
             value = site[column] if column < len(site) else None
             if not isinstance(value, (int, float)):
                 continue
-            if "posterior" in label:
+            if is_posterior:
                 if value >= POSTERIOR_THRESHOLD:
                     named.append(str(i))
             elif value < P_THRESHOLD:
